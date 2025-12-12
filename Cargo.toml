@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/paw-classfile-format"
+, "crates/paw-mutf8"]
+
+[workspace.package]
+version = "0.0.1-dev"
+edition = "2024"
+
+[workspace.dependencies]
+byteorder = "1.5.0"
+thiserror = "1.0.69"

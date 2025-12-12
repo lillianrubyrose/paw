@@ -1,0 +1,13 @@
+[package]
+name = "paw_classfile_format"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+byteorder.workspace = true
+thiserror.workspace = true
+
+num-conv = "0.2.0"
+eyre = "0.6.12"
+color-eyre = "0.6.5"
+bytemuck = "1.24.0"
