@@ -1,7 +1,11 @@
 use eyre::{Result, bail, eyre};
 use paw_classfile_format::{AccessFlags, CPTag, ClassFile, ClassFileVersion};
 
-use crate::{attribute::LIRAttribute, field::LIRField, method::LIRMethod};
+use crate::{
+	attribute::{LIRAttribute, LIRAttributeKind},
+	field::LIRField,
+	method::LIRMethod,
+};
 
 #[derive(Debug)]
 pub struct LIRClass {
@@ -113,6 +117,16 @@ impl LIRClass {
 			.unwrap();
 		dbg!(&attributes);
 
+		for attr in attributes.iter() {
+			if let LIRAttribute {
+				kind: LIRAttributeKind::Unknown(val),
+				..
+			} = attr
+			{
+				panic!("unknown attribute `{}` in class `{}`", val, this_class)
+			}
+		}
+
 		LIRClass {
 			version,
 			cp,
@@ -140,7 +154,7 @@ pub fn get_utf8_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-	use std::io::Cursor;
+	use std::{fs, io::Cursor};
 
 	use paw_classfile_format::ClassFile;
 
@@ -160,11 +174,36 @@ mod tests {
 	#[test]
 	fn parse_enterprise_hello_world() -> eyre::Result<()> {
 		color_eyre::install()?;
-		let hello_world_class = include_bytes!("../../../test_data/enterprise_hello_world/EnterpriseHelloWorld.class");
-		let mut cursor = Cursor::new(hello_world_class);
-		let cf = ClassFile::read(&mut cursor).unwrap();
-		let lir_cf = LIRClass::parse(cf);
-		println!("{lir_cf:#?}");
+		println!("{}", std::env::current_dir().unwrap().display());
+		for entry in fs::read_dir("../../test_data/enterprise_hello_world/").unwrap() {
+			let entry = entry.unwrap();
+			let path = entry.path();
+			if path.is_file() && path.extension().unwrap() == "class" {
+				let hello_world_class = fs::read(path).unwrap();
+				let mut cursor = Cursor::new(hello_world_class);
+				let cf = ClassFile::read(&mut cursor).unwrap();
+				let lir_cf = LIRClass::parse(cf);
+				println!("{lir_cf:#?}");
+			};
+		}
+		Ok(())
+	}
+
+	#[test]
+	fn parse_annos() -> eyre::Result<()> {
+		color_eyre::install()?;
+		println!("{}", std::env::current_dir().unwrap().display());
+		for entry in fs::read_dir("../../test_data/hello_world2/").unwrap() {
+			let entry = entry.unwrap();
+			let path = entry.path();
+			if path.is_file() && path.extension().unwrap() == "class" {
+				let hello_world_class = fs::read(path).unwrap();
+				let mut cursor = Cursor::new(hello_world_class);
+				let cf = ClassFile::read(&mut cursor).unwrap();
+				let lir_cf = LIRClass::parse(cf);
+				println!("{lir_cf:#?}");
+			};
+		}
 		Ok(())
 	}
 }

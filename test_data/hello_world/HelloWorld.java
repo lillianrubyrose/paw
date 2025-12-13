@@ -1,3 +1,5 @@
+package hello_world;
+
 import java.util.concurrent.ThreadLocalRandom;
 
 interface Meow<Bark> {
