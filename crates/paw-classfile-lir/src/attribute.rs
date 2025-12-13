@@ -52,10 +52,16 @@ impl LIRAttribute {
 				let max_stack = attr_buf.read_u16::<BigEndian>()?;
 				let max_locals = attr_buf.read_u16::<BigEndian>()?;
 				let code_len = attr_buf.read_u32::<BigEndian>()?;
-				let code = attr_buf.read_vec::<u8, BigEndian>(code_len as usize)?;
+				let code = attr_buf.read_vec_with(code_len as usize, |reader| Ok(reader.read_u8()?))?;
 				let exceptions_len = attr_buf.read_u16::<BigEndian>()?;
-				let exception_table =
-					attr_buf.read_vec::<CodeAttributeException, BigEndian>(usize::from(exceptions_len))?;
+				let exception_table = attr_buf.read_vec_with(exceptions_len as usize, |reader| {
+					Ok(CodeAttributeException {
+						start_pc: reader.read_u16::<BigEndian>()?,
+						end_pc: reader.read_u16::<BigEndian>()?,
+						handler_pc: reader.read_u16::<BigEndian>()?,
+						catch_type: reader.read_u16::<BigEndian>()?,
+					})
+				})?;
 				let attrs_count = attr_buf.read_u16::<BigEndian>()?;
 				let mut attributes = Vec::with_capacity(usize::from(attrs_count));
 				for _ in 0..attrs_count {
@@ -73,9 +79,13 @@ impl LIRAttribute {
 			}
 			"LineNumberTable" => {
 				let table_len = attr_buf.read_u16::<BigEndian>()?;
-				let line_number_table =
-					attr_buf.read_vec::<LineNumberTableAttributeEntry, BigEndian>(usize::from(table_len))?;
-				LIRAttributeKind::LineNumberTable(LineNumberTableAttribute { line_number_table })
+				let table = attr_buf.read_vec_with(usize::from(table_len), |reader| {
+					Ok(LineNumberTableAttributeEntry {
+						start_pc: reader.read_u16::<BigEndian>()?,
+						line_number: reader.read_u16::<BigEndian>()?,
+					})
+				})?;
+				LIRAttributeKind::LineNumberTable(LineNumberTableAttribute { table })
 			}
 			"LocalVariableTable" => {
 				let num_entries = attr_buf.read_u16::<BigEndian>()?;
@@ -87,10 +97,9 @@ impl LIRAttribute {
 			}
 			"LocalVariableTypeTable" => {
 				let num_entries = attr_buf.read_u16::<BigEndian>()?;
-				let mut table = Vec::with_capacity(usize::from(num_entries));
-				for _ in 0..num_entries {
-					table.push(LocalVariableTypeTableEntry::read(&mut attr_buf, cp)?);
-				}
+				let table = attr_buf.read_vec_with(usize::from(num_entries), |reader| {
+					LocalVariableTypeTableEntry::read(reader, cp)
+				})?;
 				LIRAttributeKind::LocalVariableTypeTable(LocalVariableTypeTableAttribute { table })
 			}
 			n => panic!("unparsed attribute: {n}"),
@@ -230,7 +239,7 @@ pub struct LineNumberTableAttributeEntry {
 
 #[derive(Debug, Clone)]
 pub struct LineNumberTableAttribute {
-	pub line_number_table: Vec<LineNumberTableAttributeEntry>,
+	pub table: Vec<LineNumberTableAttributeEntry>,
 }
 
 #[derive(Debug, Clone)]

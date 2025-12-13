@@ -60,7 +60,9 @@ impl ClassFile {
 		let this_class = buffer.read_u16::<BigEndian>()?;
 		let super_class = buffer.read_u16::<BigEndian>()?;
 		let interface_count = buffer.read_u16::<BigEndian>()?;
-		let interfaces = buffer.read_vec::<u16, BigEndian>(usize::from(interface_count))?;
+		let interfaces = buffer.read_vec_with(usize::from(interface_count), |reader| {
+			Ok(reader.read_u16::<BigEndian>()?)
+		})?;
 
 		let field_count = buffer.read_u16::<BigEndian>()?;
 		let mut fields = Vec::with_capacity(usize::from(field_count));
@@ -154,7 +156,7 @@ impl AttributeInfo {
 		let attribute_length = buffer.read_u32::<BigEndian>()?;
 		Ok(AttributeInfo {
 			attribute_name_index,
-			info: buffer.read_vec::<_, BigEndian>(attribute_length as usize)?,
+			info: buffer.read_vec_with(attribute_length as usize, |reader| Ok(reader.read_u8()?))?,
 		})
 	}
 
@@ -353,7 +355,7 @@ impl CPTag {
 		match tag {
 			1 => {
 				let len = buffer.read_u16::<BigEndian>()?;
-				let bytes = buffer.read_vec::<u8, BigEndian>(usize::from(len))?;
+				let bytes = buffer.read_vec_with(usize::from(len), |reader| Ok(reader.read_u8()?))?;
 				Ok(CPTag::Utf8 { bytes })
 			}
 			3 => Ok(CPTag::Integer(buffer.read_u32::<BigEndian>()?)),
