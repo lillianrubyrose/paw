@@ -5,7 +5,7 @@ use byteorder::{BigEndian, ReadBytesExt as _};
 use eyre::bail;
 use paw_classfile_format::{AttributeInfo, CPTag, ext::ReadBytesExt};
 
-use crate::class::get_utf8_cp_entry;
+use crate::{class::get_utf8_cp_entry, descriptor::Descriptor};
 
 #[derive(Debug, Clone)]
 pub struct LIRAttribute {
@@ -71,10 +71,28 @@ impl LIRAttribute {
 					attributes,
 				})
 			}
-			// FIXME: implement these for realsies
-			"LineNumberTable" => LIRAttributeKind::Deprecated,
-			"LocalVariableTable" => LIRAttributeKind::Deprecated,
-			"LocalVariableTypeTable" => LIRAttributeKind::Deprecated,
+			"LineNumberTable" => {
+				let table_len = attr_buf.read_u16::<BigEndian>()?;
+				let line_number_table =
+					attr_buf.read_vec::<LineNumberTableAttributeEntry, BigEndian>(usize::from(table_len))?;
+				LIRAttributeKind::LineNumberTable(LineNumberTableAttribute { line_number_table })
+			}
+			"LocalVariableTable" => {
+				let num_entries = attr_buf.read_u16::<BigEndian>()?;
+				let mut table = Vec::with_capacity(usize::from(num_entries));
+				for _ in 0..num_entries {
+					table.push(LocalVariableTableEntry::read(&mut attr_buf, cp)?);
+				}
+				LIRAttributeKind::LocalVariableTable(LocalVariableTableAttribute { table })
+			}
+			"LocalVariableTypeTable" => {
+				let num_entries = attr_buf.read_u16::<BigEndian>()?;
+				let mut table = Vec::with_capacity(usize::from(num_entries));
+				for _ in 0..num_entries {
+					table.push(LocalVariableTypeTableEntry::read(&mut attr_buf, cp)?);
+				}
+				LIRAttributeKind::LocalVariableTypeTable(LocalVariableTypeTableAttribute { table })
+			}
 			n => panic!("unparsed attribute: {n}"),
 		};
 
@@ -94,6 +112,8 @@ pub enum LIRAttributeKind {
 	SourceFile(String),
 	SourceDebugExtension(String),
 	LineNumberTable(LineNumberTableAttribute),
+	LocalVariableTable(LocalVariableTableAttribute),
+	LocalVariableTypeTable(LocalVariableTypeTableAttribute),
 	Deprecated,
 }
 
@@ -202,7 +222,7 @@ pub struct CodeAttribute {
 	pub attributes: Vec<LIRAttribute>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, AnyBitPattern)]
 pub struct LineNumberTableAttributeEntry {
 	pub start_pc: u16,
 	pub line_number: u16,
@@ -217,4 +237,71 @@ pub struct LineNumberTableAttribute {
 pub struct MethodParametersParam {
 	pub name: Option<String>, // Utf8Ref
 	pub access_flags: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalVariableTableEntry {
+	pub start_pc: u16,
+	pub len: u16,
+	pub name: String,
+	pub descriptor: Descriptor,
+	pub local_idx: u16,
+}
+
+impl LocalVariableTableEntry {
+	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> eyre::Result<Self> {
+		let start_pc = buffer.read_u16::<BigEndian>()?;
+		let len = buffer.read_u16::<BigEndian>()?;
+		let name_idx = buffer.read_u16::<BigEndian>()?;
+		let name = get_utf8_cp_entry(cp, name_idx)?;
+		let descriptor_idx = buffer.read_u16::<BigEndian>()?;
+		let descriptor = get_utf8_cp_entry(cp, descriptor_idx)?.parse()?;
+		let local_idx = buffer.read_u16::<BigEndian>()?;
+		Ok(LocalVariableTableEntry {
+			start_pc,
+			len,
+			name,
+			descriptor,
+			local_idx,
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalVariableTableAttribute {
+	pub table: Vec<LocalVariableTableEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalVariableTypeTableEntry {
+	pub start_pc: u16,
+	pub len: u16,
+	pub name: String,
+	// FIXME: strutured data for this
+	pub signature: String,
+	pub local_idx: u16,
+}
+
+impl LocalVariableTypeTableEntry {
+	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> eyre::Result<Self> {
+		let start_pc = buffer.read_u16::<BigEndian>()?;
+		let len = buffer.read_u16::<BigEndian>()?;
+		let name_idx = buffer.read_u16::<BigEndian>()?;
+		let name = get_utf8_cp_entry(cp, name_idx)?;
+		let signature_idx = buffer.read_u16::<BigEndian>()?;
+		let signature = get_utf8_cp_entry(cp, signature_idx)?;
+		let local_idx = buffer.read_u16::<BigEndian>()?;
+		Ok(LocalVariableTypeTableEntry {
+			start_pc,
+			len,
+			name,
+			signature,
+			local_idx,
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalVariableTypeTableAttribute {
+	pub table: Vec<LocalVariableTypeTableEntry>,
 }
