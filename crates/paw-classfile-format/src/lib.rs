@@ -49,10 +49,7 @@ impl ClassFile {
 		let minor_version = buffer.read_u16::<BigEndian>()?;
 		let major_version = buffer.read_u16::<BigEndian>()?;
 		let cp_count = buffer.read_u16::<BigEndian>()?;
-		let mut cp = Vec::with_capacity(usize::from(cp_count) - 1);
-		for _ in 0..cp_count - 1 {
-			cp.push(CPTag::read(buffer)?);
-		}
+		let cp = buffer.read_vec_with(usize::from(cp_count - 1), |b| CPTag::read(b))?;
 		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
 		if !AccessFlags::all().contains(access_flags) {
 			bail!("access flags contain unknown bits: {:?}", access_flags);
@@ -65,20 +62,11 @@ impl ClassFile {
 		})?;
 
 		let field_count = buffer.read_u16::<BigEndian>()?;
-		let mut fields = Vec::with_capacity(usize::from(field_count));
-		for _ in 0..field_count {
-			fields.push(FieldInfo::read(buffer)?);
-		}
+		let fields = buffer.read_vec_with(usize::from(field_count), |b| FieldInfo::read(b))?;
 		let method_count = buffer.read_u16::<BigEndian>()?;
-		let mut methods = Vec::with_capacity(usize::from(method_count));
-		for _ in 0..method_count {
-			methods.push(MethodInfo::read(buffer)?);
-		}
+		let methods = buffer.read_vec_with(usize::from(method_count), |b| MethodInfo::read(b))?;
 		let attribute_count = buffer.read_u16::<BigEndian>()?;
-		let mut attributes = Vec::with_capacity(usize::from(attribute_count));
-		for _ in 0..attribute_count {
-			attributes.push(AttributeInfo::read(buffer)?);
-		}
+		let attributes = buffer.read_vec_with(usize::from(attribute_count), |b| AttributeInfo::read(b))?;
 
 		Ok(Self {
 			version: ClassFileVersion {
@@ -202,17 +190,13 @@ pub struct FieldInfo {
 impl FieldInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<FieldInfo> {
 		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
-		let name_index = buffer.read_u16::<BigEndian>()?;
-		let descriptor_index = buffer.read_u16::<BigEndian>()?;
-		let attributes_count = buffer.read_u16::<BigEndian>()?;
-		let mut attributes = Vec::with_capacity(usize::from(attributes_count));
-		for _ in 0..attributes_count {
-			attributes.push(AttributeInfo::read(buffer)?);
-		}
-
 		if !AccessFlags::all().contains(access_flags) {
 			bail!("access flags contain unknown bits: {:?}", access_flags);
 		}
+		let name_index = buffer.read_u16::<BigEndian>()?;
+		let descriptor_index = buffer.read_u16::<BigEndian>()?;
+		let attributes_count = buffer.read_u16::<BigEndian>()?;
+		let attributes = buffer.read_vec_with(usize::from(attributes_count), |b| AttributeInfo::read(b))?;
 
 		Ok(FieldInfo {
 			access_flags,
@@ -251,17 +235,13 @@ pub struct MethodInfo {
 impl MethodInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<MethodInfo> {
 		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
-		let name_index = buffer.read_u16::<BigEndian>()?;
-		let descriptor_index = buffer.read_u16::<BigEndian>()?;
-		let attributes_count = buffer.read_u16::<BigEndian>()?;
-		let mut attributes = Vec::with_capacity(usize::from(attributes_count));
-		for _ in 0..attributes_count {
-			attributes.push(AttributeInfo::read(buffer)?);
-		}
-
 		if !AccessFlags::all().contains(access_flags) {
 			bail!("access flags contain unknown bits: {:?}", access_flags);
 		}
+		let name_index = buffer.read_u16::<BigEndian>()?;
+		let descriptor_index = buffer.read_u16::<BigEndian>()?;
+		let attributes_count = buffer.read_u16::<BigEndian>()?;
+		let attributes = buffer.read_vec_with(usize::from(attributes_count), |b| AttributeInfo::read(b))?;
 
 		Ok(MethodInfo {
 			access_flags,
