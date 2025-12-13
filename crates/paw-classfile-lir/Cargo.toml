@@ -1,14 +1,15 @@
 [package]
-name = "paw_classfile_format"
+name = "paw_classfile_lir"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
+paw_classfile_format = { path = "../paw-classfile-format" }
+paw_mutf8 = { path = "../paw-mutf8" }
+
 byteorder.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
-
-num-conv = "0.2.0"
+bitflags = "2.10.0"
 eyre = "0.6.12"
 color-eyre = "0.6.5"
-bitflags = "2.10.0"

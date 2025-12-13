@@ -1,11 +1,14 @@
+use bitflags::bitflags;
 use byteorder::{BigEndian, WriteBytesExt};
-use eyre::Result;
+use eyre::{Result, bail};
 use num_conv::Truncate;
 use thiserror::Error;
 
 use crate::ext::ReadBytesExt;
 
-mod ext;
+pub mod ext;
+
+pub const CLASSFILE_MAGIC: u32 = 0xCAFEBABE;
 
 #[derive(Debug, Error)]
 pub enum ClassFileReadError {
@@ -25,9 +28,7 @@ pub enum ClassFileWriteError {
 
 #[derive(Debug)]
 pub struct ClassFile {
-	pub magic: u32,
-	pub minor_version: u16,
-	pub major_version: u16,
+	pub version: ClassFileVersion,
 	pub cp: Vec<CPTag>,
 	pub access_flags: u16,
 	pub this_class: u16,
@@ -41,7 +42,7 @@ pub struct ClassFile {
 impl ClassFile {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<ClassFile> {
 		let magic = buffer.read_u32::<BigEndian>()?;
-		if magic != 0xCAFEBABE {
+		if magic != CLASSFILE_MAGIC {
 			return Err(ClassFileReadError::InvalidMagic)?;
 		}
 
@@ -75,9 +76,10 @@ impl ClassFile {
 		}
 
 		Ok(Self {
-			magic,
-			minor_version,
-			major_version,
+			version: ClassFileVersion {
+				major: major_version,
+				minor: minor_version,
+			},
 			cp,
 			access_flags,
 			this_class,
@@ -90,9 +92,9 @@ impl ClassFile {
 	}
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u32::<BigEndian>(self.magic)?;
-		buffer.write_u16::<BigEndian>(self.minor_version)?;
-		buffer.write_u16::<BigEndian>(self.major_version)?;
+		buffer.write_u32::<BigEndian>(CLASSFILE_MAGIC)?;
+		buffer.write_u16::<BigEndian>(self.version.minor)?;
+		buffer.write_u16::<BigEndian>(self.version.minor)?;
 
 		debug_assert!(self.cp.len() <= u16::MAX as usize, "class has too many constants");
 		buffer.write_u16::<BigEndian>(self.cp.len().truncate())?;
@@ -162,9 +164,31 @@ impl AttributeInfo {
 	}
 }
 
+bitflags! {
+	// FIXME: maybe have different bitflags for different things?
+	// for example private is not valid on classes
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+	pub struct AccessFlags: u16 {
+		const PUBLIC = 0x001;
+		const PRIVATE = 0x002;
+		const PROTECTED = 0x004;
+		const STATIC = 0x008;
+		const FINAL = 0x010;
+		const SUPER = 0x020;
+		const VOLATILE = 0x040;
+		const TRANSIENT = 0x080;
+		const INTERFACE = 0x0200;
+		const ABSTRACT = 0x0400;
+		const SYNTHETIC = 0x1000;
+		const ANNOTATION = 0x2000;
+		const ENUM = 0x4000;
+		const MODULE = 0x8000;
+	}
+}
+
 #[derive(Debug)]
 pub struct FieldInfo {
-	pub access_flags: u16,
+	pub access_flags: AccessFlags,
 	pub name_index: u16,
 	pub descriptor_index: u16,
 	pub attributes: Vec<AttributeInfo>,
@@ -172,13 +196,17 @@ pub struct FieldInfo {
 
 impl FieldInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<FieldInfo> {
-		let access_flags = buffer.read_u16::<BigEndian>()?;
+		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
 		let name_index = buffer.read_u16::<BigEndian>()?;
 		let descriptor_index = buffer.read_u16::<BigEndian>()?;
 		let attributes_count = buffer.read_u16::<BigEndian>()?;
 		let mut attributes = Vec::with_capacity(usize::from(attributes_count));
 		for _ in 0..attributes_count {
 			attributes.push(AttributeInfo::read(buffer)?);
+		}
+
+		if !AccessFlags::all().contains(access_flags) {
+			bail!("access flags contain unknown bits: {:?}", access_flags);
 		}
 
 		Ok(FieldInfo {
@@ -190,7 +218,7 @@ impl FieldInfo {
 	}
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u16::<BigEndian>(self.access_flags)?;
+		buffer.write_u16::<BigEndian>(self.access_flags.bits())?;
 		buffer.write_u16::<BigEndian>(self.name_index)?;
 		buffer.write_u16::<BigEndian>(self.descriptor_index)?;
 
@@ -209,7 +237,7 @@ impl FieldInfo {
 
 #[derive(Debug)]
 pub struct MethodInfo {
-	pub access_flags: u16,
+	pub access_flags: AccessFlags,
 	pub name_index: u16,
 	pub descriptor_index: u16,
 	pub attributes: Vec<AttributeInfo>,
@@ -217,13 +245,17 @@ pub struct MethodInfo {
 
 impl MethodInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<MethodInfo> {
-		let access_flags = buffer.read_u16::<BigEndian>()?;
+		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
 		let name_index = buffer.read_u16::<BigEndian>()?;
 		let descriptor_index = buffer.read_u16::<BigEndian>()?;
 		let attributes_count = buffer.read_u16::<BigEndian>()?;
 		let mut attributes = Vec::with_capacity(usize::from(attributes_count));
 		for _ in 0..attributes_count {
 			attributes.push(AttributeInfo::read(buffer)?);
+		}
+
+		if !AccessFlags::all().contains(access_flags) {
+			bail!("access flags contain unknown bits: {:?}", access_flags);
 		}
 
 		Ok(MethodInfo {
@@ -235,7 +267,7 @@ impl MethodInfo {
 	}
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u16::<BigEndian>(self.access_flags)?;
+		buffer.write_u16::<BigEndian>(self.access_flags.bits())?;
 		buffer.write_u16::<BigEndian>(self.name_index)?;
 		buffer.write_u16::<BigEndian>(self.descriptor_index)?;
 
@@ -440,6 +472,12 @@ impl CPTag {
 		}
 		Ok(())
 	}
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClassFileVersion {
+	pub major: u16,
+	pub minor: u16,
 }
 
 #[cfg(test)]

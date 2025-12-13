@@ -1,5 +1,5 @@
 [package]
-name = "paw-mutf8"
+name = "paw_mutf8"
 version.workspace = true
 edition.workspace = true
 
