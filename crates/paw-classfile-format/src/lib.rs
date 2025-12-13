@@ -30,7 +30,7 @@ pub enum ClassFileWriteError {
 pub struct ClassFile {
 	pub version: ClassFileVersion,
 	pub cp: Vec<CPTag>,
-	pub access_flags: u16,
+	pub access_flags: AccessFlags,
 	pub this_class: u16,
 	pub super_class: u16,
 	pub interfaces: Vec<u16>,
@@ -53,7 +53,10 @@ impl ClassFile {
 		for _ in 0..cp_count - 1 {
 			cp.push(CPTag::read(buffer)?);
 		}
-		let access_flags = buffer.read_u16::<BigEndian>()?;
+		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
+		if !AccessFlags::all().contains(access_flags) {
+			bail!("access flags contain unknown bits: {:?}", access_flags);
+		}
 		let this_class = buffer.read_u16::<BigEndian>()?;
 		let super_class = buffer.read_u16::<BigEndian>()?;
 		let interface_count = buffer.read_u16::<BigEndian>()?;
@@ -102,7 +105,7 @@ impl ClassFile {
 			cp.write(buffer)?;
 		}
 
-		buffer.write_u16::<BigEndian>(self.access_flags)?;
+		buffer.write_u16::<BigEndian>(self.access_flags.bits())?;
 		buffer.write_u16::<BigEndian>(self.this_class)?;
 		buffer.write_u16::<BigEndian>(self.super_class)?;
 

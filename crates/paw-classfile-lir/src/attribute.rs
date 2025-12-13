@@ -71,6 +71,10 @@ impl LIRAttribute {
 					attributes,
 				})
 			}
+			// FIXME: implement these for realsies
+			"LineNumberTable" => LIRAttributeKind::Deprecated,
+			"LocalVariableTable" => LIRAttributeKind::Deprecated,
+			"LocalVariableTypeTable" => LIRAttributeKind::Deprecated,
 			n => panic!("unparsed attribute: {n}"),
 		};
 

@@ -22,11 +22,8 @@ impl LIRClass {
 		let cp = raw.cp;
 		let access_flags = raw.access_flags;
 		let this_class = match cp.get(raw.this_class as usize - 1).unwrap() {
-			CPTag::Class { name_index } => match cp.get(*name_index as usize - 1).unwrap() {
-				CPTag::Utf8 { bytes } => paw_mutf8::decode(&bytes).unwrap(),
-				_ => unreachable!(),
-			},
-			_ => unreachable!(),
+			CPTag::Class { name_index } => get_utf8_cp_entry(cp.as_slice(), *name_index).unwrap(),
+			_ => panic!("this_class cp idx did not point to a class entry"),
 		};
 		let super_class = if raw.super_class == 0 {
 			None
@@ -37,14 +34,7 @@ impl LIRClass {
 			else {
 				panic!("super_class cp idx pointed to a non-class entry")
 			};
-			let CPTag::Utf8 { bytes } = cp
-				.get(*name_index as usize - 1)
-				.expect("invalid super_class name cp idx")
-			else {
-				panic!("super_class name cp idx pointed at non-utf8 entry")
-			};
-
-			Some(paw_mutf8::decode(&bytes).unwrap())
+			Some(get_utf8_cp_entry(cp.as_slice(), *name_index).unwrap())
 		};
 		let interfaces = raw
 			.interfaces
@@ -53,10 +43,7 @@ impl LIRClass {
 				let t = cp.get(*idx as usize - 1).expect("invalid interface cp idx");
 				match t {
 					CPTag::Class { name_index } => {
-						match cp.get(*name_index as usize - 1).expect("invalid interface name cp idx") {
-							CPTag::Utf8 { bytes } => paw_mutf8::decode(&bytes).unwrap().into_owned(),
-							_ => panic!("interface name cp idx pointed at non-utf8 entry"),
-						}
+						get_utf8_cp_entry(cp.as_slice(), *name_index).expect("invalid interface name cp idx")
 					}
 					_ => panic!("interface cp idx pointed to a non-class entry"),
 				}
@@ -126,7 +113,17 @@ impl LIRClass {
 			.unwrap();
 		dbg!(&attributes);
 
-		todo!()
+		LIRClass {
+			version,
+			cp,
+			access_flags,
+			this_class,
+			super_class,
+			interfaces,
+			fields,
+			methods,
+			attributes,
+		}
 	}
 }
 
@@ -137,12 +134,12 @@ pub fn get_utf8_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
 	let CPTag::Utf8 { bytes } = tag else {
 		bail!("expected cp idx {} to point to utf8 tag", idx)
 	};
-	let s = paw_mutf8::decode(&bytes)?;
+	let s = paw_mutf8::decode(bytes)?;
 	Ok(s.into_owned())
 }
 
 #[cfg(test)]
-mod t {
+mod tests {
 	use std::io::Cursor;
 
 	use paw_classfile_format::ClassFile;
@@ -156,7 +153,7 @@ mod t {
 		let mut cursor = Cursor::new(hello_world_class);
 		let cf = ClassFile::read(&mut cursor).unwrap();
 		let lir_cf = LIRClass::parse(cf);
-		println!("{lir_cf:?}");
+		println!("{lir_cf:#?}");
 		Ok(())
 	}
 }
