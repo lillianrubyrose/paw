@@ -1,2 +1,2 @@
 /target
-/test_data/*.class
+/test_data/**/**.class

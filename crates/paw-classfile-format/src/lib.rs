@@ -50,10 +50,7 @@ impl ClassFile {
 		let major_version = buffer.read_u16::<BigEndian>()?;
 		let cp_count = buffer.read_u16::<BigEndian>()?;
 		let cp = buffer.read_vec_with(usize::from(cp_count - 1), |b| CPTag::read(b))?;
-		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
-		if !AccessFlags::all().contains(access_flags) {
-			bail!("access flags contain unknown bits: {:?}", access_flags);
-		}
+		let access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 		let this_class = buffer.read_u16::<BigEndian>()?;
 		let super_class = buffer.read_u16::<BigEndian>()?;
 		let interface_count = buffer.read_u16::<BigEndian>()?;
@@ -179,6 +176,23 @@ bitflags! {
 	}
 }
 
+#[derive(Debug, Clone, Copy, Error)]
+#[error("access flags contains unknown bits: {0:?}")]
+pub struct InvalidAccessFlagsErr(AccessFlags);
+
+impl TryFrom<u16> for AccessFlags {
+	type Error = InvalidAccessFlagsErr;
+
+	fn try_from(value: u16) -> std::result::Result<Self, Self::Error> {
+		let access_flags = AccessFlags::from_bits_retain(value);
+		if AccessFlags::all().contains(access_flags) {
+			Ok(access_flags)
+		} else {
+			Err(InvalidAccessFlagsErr(access_flags))
+		}
+	}
+}
+
 #[derive(Debug)]
 pub struct FieldInfo {
 	pub access_flags: AccessFlags,
@@ -189,10 +203,7 @@ pub struct FieldInfo {
 
 impl FieldInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<FieldInfo> {
-		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
-		if !AccessFlags::all().contains(access_flags) {
-			bail!("access flags contain unknown bits: {:?}", access_flags);
-		}
+		let access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 		let name_index = buffer.read_u16::<BigEndian>()?;
 		let descriptor_index = buffer.read_u16::<BigEndian>()?;
 		let attributes_count = buffer.read_u16::<BigEndian>()?;
@@ -234,10 +245,7 @@ pub struct MethodInfo {
 
 impl MethodInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<MethodInfo> {
-		let access_flags = AccessFlags::from_bits_retain(buffer.read_u16::<BigEndian>()?);
-		if !AccessFlags::all().contains(access_flags) {
-			bail!("access flags contain unknown bits: {:?}", access_flags);
-		}
+		let access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 		let name_index = buffer.read_u16::<BigEndian>()?;
 		let descriptor_index = buffer.read_u16::<BigEndian>()?;
 		let attributes_count = buffer.read_u16::<BigEndian>()?;
@@ -269,7 +277,7 @@ impl MethodInfo {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C, u8)]
 pub enum CPTag {
 	// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.7
@@ -474,7 +482,7 @@ mod tests {
 	#[test]
 	fn reads_hello_world() -> eyre::Result<()> {
 		color_eyre::install()?;
-		let hello_world_class = include_bytes!("../../../test_data/HelloWorld.class");
+		let hello_world_class = include_bytes!("../../../test_data/hello_world/HelloWorld.class");
 		let mut cursor = Cursor::new(hello_world_class);
 		let cf = ClassFile::read(&mut cursor)?;
 		println!("{cf:?}");

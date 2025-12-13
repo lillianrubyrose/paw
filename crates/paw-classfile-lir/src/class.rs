@@ -149,7 +149,18 @@ mod tests {
 	#[test]
 	fn parse_hello_world() -> eyre::Result<()> {
 		color_eyre::install()?;
-		let hello_world_class = include_bytes!("../../../test_data/HelloWorld.class");
+		let hello_world_class = include_bytes!("../../../test_data/hello_world/HelloWorld.class");
+		let mut cursor = Cursor::new(hello_world_class);
+		let cf = ClassFile::read(&mut cursor).unwrap();
+		let lir_cf = LIRClass::parse(cf);
+		println!("{lir_cf:#?}");
+		Ok(())
+	}
+
+	#[test]
+	fn parse_enterprise_hello_world() -> eyre::Result<()> {
+		color_eyre::install()?;
+		let hello_world_class = include_bytes!("../../../test_data/enterprise_hello_world/EnterpriseHelloWorld.class");
 		let mut cursor = Cursor::new(hello_world_class);
 		let cf = ClassFile::read(&mut cursor).unwrap();
 		let lir_cf = LIRClass::parse(cf);

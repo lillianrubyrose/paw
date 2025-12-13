@@ -2,10 +2,14 @@ use std::io::Cursor;
 
 use bytemuck::AnyBitPattern;
 use byteorder::{BigEndian, ReadBytesExt as _};
-use eyre::bail;
-use paw_classfile_format::{AttributeInfo, CPTag, ext::ReadBytesExt};
+use eyre::{OptionExt, Result, bail};
+use paw_classfile_format::{AccessFlags, AttributeInfo, CPTag, ext::ReadBytesExt};
 
-use crate::{class::get_utf8_cp_entry, descriptor::Descriptor};
+use crate::{
+	class::get_utf8_cp_entry,
+	descriptor::Descriptor,
+	method::{LIRMethodHandle, LIRMethodHandleKind},
+};
 
 #[derive(Debug, Clone)]
 pub struct LIRAttribute {
@@ -14,7 +18,7 @@ pub struct LIRAttribute {
 }
 
 impl LIRAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> eyre::Result<Self> {
+	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
 		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
 			CPTag::Utf8 { bytes } => paw_mutf8::decode(&bytes)?.into_owned(),
 			_ => unreachable!(),
@@ -22,14 +26,6 @@ impl LIRAttribute {
 
 		let mut attr_buf = Cursor::new(raw.info);
 		let kind = match name.as_ref() {
-			"SourceFile" => {
-				let index = attr_buf.read_u16::<BigEndian>()?;
-				let sourcefile_utf8 = match cp.get(index as usize - 1).unwrap() {
-					CPTag::Utf8 { bytes } => paw_mutf8::decode(&bytes)?.into_owned(),
-					_ => unreachable!(),
-				};
-				LIRAttributeKind::SourceFile(sourcefile_utf8)
-			}
 			"ConstantValue" => {
 				if attr_buf.get_ref().len() != 2 {
 					bail!("ConstantValue attr must have length of exactly 2");
@@ -77,6 +73,40 @@ impl LIRAttribute {
 					attributes,
 				})
 			}
+			"StackMapTable" => {
+				let entries_count = attr_buf.read_u16::<BigEndian>()?;
+				let mut entries: Vec<StackMapFrame> = Vec::with_capacity(entries_count as usize);
+				for _ in 0..entries_count {
+					entries.push(StackMapFrame::parse(&mut attr_buf)?);
+				}
+				LIRAttributeKind::StackMapTable(StackMapTableAttribute { entries })
+			}
+			// TODO: exceptions
+			"InnerClasses" => {
+				let n_classes = attr_buf.read_u16::<BigEndian>()?;
+				let classes =
+					attr_buf.read_vec_with(usize::from(n_classes), |b| InnerClassesAttributeClass::parse(b, cp))?;
+				LIRAttributeKind::InnerClasses(InnerClassesAttribute { classes })
+			}
+			// TODO: EnclosingMethod
+			"Synthetic" => {
+				// TODO: validate that there's no data?
+				LIRAttributeKind::Synthetic
+			}
+			"Signature" => {
+				let index = attr_buf.read_u16::<BigEndian>()?;
+				let signature = get_utf8_cp_entry(cp, index)?;
+				LIRAttributeKind::Signature(signature)
+			}
+			"SourceFile" => {
+				let index = attr_buf.read_u16::<BigEndian>()?;
+				let sourcefile_utf8 = match cp.get(index as usize - 1).unwrap() {
+					CPTag::Utf8 { bytes } => paw_mutf8::decode(&bytes)?.into_owned(),
+					_ => unreachable!(),
+				};
+				LIRAttributeKind::SourceFile(sourcefile_utf8)
+			}
+			// TODO: SourceDebugExtension
 			"LineNumberTable" => {
 				let table_len = attr_buf.read_u16::<BigEndian>()?;
 				let table = attr_buf.read_vec_with(usize::from(table_len), |reader| {
@@ -102,6 +132,24 @@ impl LIRAttribute {
 				})?;
 				LIRAttributeKind::LocalVariableTypeTable(LocalVariableTypeTableAttribute { table })
 			}
+			"Deprecated" => {
+				// TODO: validate that there's no data?
+				LIRAttributeKind::Deprecated
+			}
+			// TODO: RuntimeVisibleAnnotations
+			// TODO: RuntimeInvisibleAnnotations
+			// TODO: RuntimeVisibleParameterAnnotations
+			// TODO: RuntimeInisibleParameterAnnotations
+			// TODO: AnnotationDefault
+			"BootstrapMethods" => {
+				let n_methods = attr_buf.read_u16::<BigEndian>()? as usize;
+				let mut methods = Vec::with_capacity(n_methods);
+				for _ in 0..n_methods {
+					methods.push(BootstrapMethod::parse(&mut attr_buf, cp)?);
+				}
+				LIRAttributeKind::BootstrapMethods(methods)
+			}
+
 			n => panic!("unparsed attribute: {n}"),
 		};
 
@@ -116,7 +164,9 @@ pub enum LIRAttributeKind {
 	StackMapTable(StackMapTableAttribute),
 	Exceptions { exception_index_table: Vec<String> },
 	InnerClasses(InnerClassesAttribute),
+	// TODO: EnclosingMethod
 	Synthetic,
+	// FIXME: more structured data?
 	Signature(String),
 	SourceFile(String),
 	SourceDebugExtension(String),
@@ -124,6 +174,12 @@ pub enum LIRAttributeKind {
 	LocalVariableTable(LocalVariableTableAttribute),
 	LocalVariableTypeTable(LocalVariableTypeTableAttribute),
 	Deprecated,
+	// TODO: RuntimeVisibleAnnotations
+	// TODO: RuntimeInvisibleAnnotations
+	// TODO: RuntimeVisibleParameterAnnotations
+	// TODO: RuntimeInisibleParameterAnnotations
+	// TODO: AnnotationDefault
+	BootstrapMethods(Vec<BootstrapMethod>),
 }
 
 #[derive(Debug, Clone)]
@@ -154,51 +210,127 @@ pub enum VerificationTypeInfo {
 	UninitializedVariableInfo { offset: u16 } = 8,
 }
 
+impl VerificationTypeInfo {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+		let tag = buffer.read_u8()?;
+		Ok(match tag {
+			0 => Self::TopVariableInfo,
+			1 => Self::IntegerVariableInfo,
+			2 => Self::FloatVariableInfo,
+			4 => Self::LongVariableInfo,
+			3 => Self::DoubleVariableInfo,
+			5 => Self::NullVariableInfo,
+			6 => Self::UninitializedThisVariableInfo,
+			7 => Self::ObjectVariableInfo {
+				cpool_idx: buffer.read_u16::<BigEndian>()?,
+			},
+			8 => Self::UninitializedVariableInfo {
+				offset: buffer.read_u16::<BigEndian>()?,
+			},
+			tag => bail!("Unrecognized verification type info tag: {tag}"),
+		})
+	}
+}
+
 #[derive(Debug, Clone)]
 pub enum StackMapFrame {
 	SameFrame {
 		frame_type: u8,
-		offset_delta: u16,
 	},
 	SameLocals1StackItemFrame {
 		frame_type: u8,
-		offset_delta: u16,
 		stack: VerificationTypeInfo,
 	},
 	SameLocals1StackItemFrameExtended {
-		frame_type: u8,
 		offset_delta: u16,
 		stack: VerificationTypeInfo,
 	},
-	/*
-	   The frame type chop_frame is represented by tags in the range [248-250]. If the frame_type is chop_frame,-
-	   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
-	   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
-	*/
-	// TODO: do we store `k` for convenience? wtf is this shit
 	ChopFrame {
-		frame_type: u8,
+		chop_locals: u8,
 		offset_delta: u16,
 	},
 	SameFrameExtended {
-		frame_type: u8,
 		offset_delta: u16,
 	},
 	AppendFrame {
-		frame_type: u8,
 		offset_delta: u16,
 		locals: Vec<VerificationTypeInfo>,
 	},
 	FullFrame {
-		frame_type: u8,
 		offset_delta: u16,
-		// number_of_locals: u16,
 		locals: Vec<VerificationTypeInfo>,
-		// verification_type_info locals[number_of_locals];
-		// number_of_stack_items: u16,
 		stack: Vec<VerificationTypeInfo>,
-		// verification_type_info stack[number_of_stack_items];
 	},
+}
+
+impl StackMapFrame {
+	pub fn offset_delta(&self) -> u16 {
+		match self {
+			StackMapFrame::SameFrame { frame_type } => *frame_type as u16,
+			StackMapFrame::SameLocals1StackItemFrame { frame_type, .. } => *frame_type as u16 - 64,
+			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, .. } => *offset_delta,
+			StackMapFrame::ChopFrame { offset_delta, .. } => *offset_delta,
+			StackMapFrame::SameFrameExtended { offset_delta, .. } => *offset_delta,
+			StackMapFrame::AppendFrame { offset_delta, .. } => *offset_delta,
+			StackMapFrame::FullFrame { offset_delta, .. } => *offset_delta,
+		}
+	}
+
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+		let frame_type = buffer.read_u8()?;
+		Ok(match frame_type {
+			0..=63 => Self::SameFrame { frame_type },
+			64..=127 => Self::SameLocals1StackItemFrame {
+				frame_type,
+				stack: VerificationTypeInfo::parse(buffer)?,
+			},
+			247 => Self::SameLocals1StackItemFrameExtended {
+				offset_delta: buffer.read_u16::<BigEndian>()?,
+				stack: VerificationTypeInfo::parse(buffer)?,
+			},
+			248..=250 => Self::ChopFrame {
+				/*
+				   The frame type chop_frame is represented by tags in the range [248-250]. If the frame_type is chop_frame,-
+				   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
+				   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
+				*/
+				chop_locals: 251 - frame_type,
+				offset_delta: buffer.read_u16::<BigEndian>()?,
+			},
+			251 => Self::SameFrameExtended {
+				offset_delta: buffer.read_u16::<BigEndian>()?,
+			},
+			252..=254 => {
+				let offset_delta = buffer.read_u16::<BigEndian>()?;
+
+				let n_locals = (frame_type - 251) as usize;
+				let locals = buffer.read_vec_with(n_locals, |b| VerificationTypeInfo::parse(b))?;
+				Self::AppendFrame { offset_delta, locals }
+			}
+			255 => {
+				let offset_delta = buffer.read_u16::<BigEndian>()?;
+				let n_locals = buffer.read_u16::<BigEndian>()? as usize;
+				let mut locals = Vec::with_capacity(n_locals);
+				for _ in 0..n_locals {
+					locals.push(VerificationTypeInfo::parse(buffer)?);
+				}
+
+				let n_stack = buffer.read_u16::<BigEndian>()? as usize;
+				let mut stack = Vec::with_capacity(n_stack);
+				for _ in 0..n_stack {
+					stack.push(VerificationTypeInfo::parse(buffer)?);
+				}
+
+				Self::FullFrame {
+					offset_delta,
+					locals,
+					stack,
+				}
+			}
+
+			_ => panic!("invalid frame tag {frame_type}"),
+		})
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -206,7 +338,50 @@ pub struct InnerClassesAttributeClass {
 	pub inner_class_info: String,         // ClassRef
 	pub outer_class_info: Option<String>, // ClassRef
 	pub inner_name: Option<String>,       // Utf8Ref
-	pub inner_class_access_flags: u16,
+	pub inner_class_access_flags: AccessFlags,
+}
+
+impl InnerClassesAttributeClass {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let inner_info_idx = buffer.read_u16::<BigEndian>()?;
+		let outer_info_idx = buffer.read_u16::<BigEndian>()?;
+		let inner_name_idx = buffer.read_u16::<BigEndian>()?;
+		let inner_class_access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
+
+		let CPTag::Class {
+			name_index: inner_info_name_idx,
+		} = cp.get(inner_info_idx as usize - 1)
+			.ok_or_eyre("inner class inner_info_idx invalid")?
+		else {
+			bail!("inner class inner_info_idx doesn't point to a class tag");
+		};
+		let inner_class_info = get_utf8_cp_entry(cp, *inner_info_name_idx)?;
+
+		let outer_info_tag = if outer_info_idx == 0 {
+			None
+		} else {
+			let tag = cp
+				.get(outer_info_idx as usize - 1)
+				.ok_or_eyre("inner class outer_info_idx invalid")?;
+			match tag {
+				CPTag::Class { name_index } => Some(get_utf8_cp_entry(cp, *name_index)?),
+				_ => bail!("inner class outer_info_idx doesn't point to a class tag"),
+			}
+		};
+
+		let inner_name_tag = if inner_name_idx == 0 {
+			None
+		} else {
+			Some(get_utf8_cp_entry(cp, inner_name_idx)?)
+		};
+
+		Ok(Self {
+			inner_class_info,
+			outer_class_info: outer_info_tag,
+			inner_name: inner_name_tag,
+			inner_class_access_flags,
+		})
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -258,7 +433,7 @@ pub struct LocalVariableTableEntry {
 }
 
 impl LocalVariableTableEntry {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> eyre::Result<Self> {
+	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
 		let start_pc = buffer.read_u16::<BigEndian>()?;
 		let len = buffer.read_u16::<BigEndian>()?;
 		let name_idx = buffer.read_u16::<BigEndian>()?;
@@ -292,7 +467,7 @@ pub struct LocalVariableTypeTableEntry {
 }
 
 impl LocalVariableTypeTableEntry {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> eyre::Result<Self> {
+	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
 		let start_pc = buffer.read_u16::<BigEndian>()?;
 		let len = buffer.read_u16::<BigEndian>()?;
 		let name_idx = buffer.read_u16::<BigEndian>()?;
@@ -313,4 +488,45 @@ impl LocalVariableTypeTableEntry {
 #[derive(Debug, Clone)]
 pub struct LocalVariableTypeTableAttribute {
 	pub table: Vec<LocalVariableTypeTableEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootstrapMethod {
+	pub method: LIRMethodHandle,
+	pub arguments: Vec<CPTag>,
+}
+
+impl BootstrapMethod {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let method_idx = buffer.read_u16::<BigEndian>()?;
+		let n_args = buffer.read_u16::<BigEndian>()? as usize;
+		let argument_idxs = buffer.read_vec_with(n_args, |b| Ok(b.read_u16::<BigEndian>()?))?;
+
+		let CPTag::MethodHandle {
+			reference_kind,
+			reference_index,
+		} = cp.get(method_idx as usize - 1)
+			.ok_or_eyre("bootstrap method idx doesn't point to method handle tag")?
+		else {
+			panic!("should be method handle");
+		};
+
+		Ok(Self {
+			method: LIRMethodHandle {
+				ref_kind: LIRMethodHandleKind::try_from(*reference_kind)?,
+				ref_tag: cp
+					.get(*reference_index as usize - 1)
+					.cloned()
+					.ok_or_eyre("bootstrap method method reference idx invalid")?,
+			},
+			arguments: argument_idxs
+				.into_iter()
+				.map(|idx| {
+					cp.get(idx as usize - 1)
+						.cloned()
+						.ok_or_eyre("bootstrap method method reference idx invalid")
+				})
+				.collect::<Result<Vec<_>>>()?,
+		})
+	}
 }
