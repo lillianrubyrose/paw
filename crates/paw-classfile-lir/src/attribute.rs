@@ -218,6 +218,12 @@ impl LIRAttribute {
 				let methods = attr_buf.read_vec_with(n_methods, |b| BootstrapMethod::parse(b, cp))?;
 				LIRAttributeKind::BootstrapMethods(methods)
 			}
+			"MethodParameters" => {
+				LIRAttributeKind::MethodParameters(MethodParametersAnnotation::parse(&mut attr_buf, cp)?)
+			}
+			// TODO: Module
+			// TODO: ModulePackages
+			// TODO: ModuleMainClass
 			"NestHost" => {
 				let idx = attr_buf.read_u16::<BigEndian>()?;
 				let CPTag::Class { name_index } = cp.get(idx as usize - 1).ok_or_eyre("invalid nesthost idx")? else {
@@ -286,7 +292,7 @@ pub enum LIRAttributeKind {
 	RuntimeInvisibleTypeAnnotations(Vec<RuntimeTypeAnnotation>),
 	AnnotationDefault(RuntimeAnnotationValue),
 	BootstrapMethods(Vec<BootstrapMethod>),
-	// TODO: MethodParameters
+	MethodParameters(MethodParametersAnnotation),
 	// TODO: Module
 	// TODO: ModulePackages
 	// TODO: ModuleMainClass
@@ -967,5 +973,35 @@ impl RuntimeTypeAnnotation {
 				.ok_or_eyre("invalid runtimetypeannotation type name")??,
 			pairs,
 		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodParameterEntry {
+	pub name: Option<String>,
+	// FIXME: document/enforce restrictions
+	// FIXME: this actually uses 0x8000 as ACC_MANDATED, we need to split out the access flags by context
+	pub access: AccessFlags,
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodParametersAnnotation {
+	parameters: Vec<MethodParameterEntry>,
+}
+
+impl MethodParametersAnnotation {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let param_count = usize::from(buffer.read_u8()?);
+		let parameters = buffer.read_vec_with(param_count, |b| {
+			let name_idx = b.read_u16::<BigEndian>()?;
+			let access = AccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
+			let name = if name_idx != 0 {
+				Some(get_utf8_cp_entry(cp, name_idx)?)
+			} else {
+				None
+			};
+			Ok(MethodParameterEntry { name, access })
+		})?;
+		Ok(Self { parameters })
 	}
 }
