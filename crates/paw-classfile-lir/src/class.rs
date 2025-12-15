@@ -162,7 +162,6 @@ mod tests {
 
 	#[test]
 	fn parse_hello_world() -> eyre::Result<()> {
-		color_eyre::install()?;
 		let hello_world_class = include_bytes!("../../../test_data/hello_world/HelloWorld.class");
 		let mut cursor = Cursor::new(hello_world_class);
 		let cf = ClassFile::read(&mut cursor).unwrap();
@@ -173,7 +172,6 @@ mod tests {
 
 	#[test]
 	fn parse_enterprise_hello_world() -> eyre::Result<()> {
-		color_eyre::install()?;
 		println!("{}", std::env::current_dir().unwrap().display());
 		for entry in fs::read_dir("../../test_data/enterprise_hello_world/").unwrap() {
 			let entry = entry.unwrap();
@@ -191,7 +189,6 @@ mod tests {
 
 	#[test]
 	fn parse_annos() -> eyre::Result<()> {
-		color_eyre::install()?;
 		println!("{}", std::env::current_dir().unwrap().display());
 		for entry in fs::read_dir("../../test_data/hello_world2/").unwrap() {
 			let entry = entry.unwrap();
