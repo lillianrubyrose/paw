@@ -1,8 +1,6 @@
-use std::io::Cursor;
-
 use bytemuck::AnyBitPattern;
-use byteorder::{BigEndian, ReadBytesExt as _};
-use eyre::{OptionExt, Result, bail};
+use byteorder::BigEndian;
+use eyre::{Context, OptionExt, Result, bail, eyre};
 use paw_classfile_format::{AccessFlags, AttributeInfo, CPTag, ext::ReadBytesExt};
 
 use crate::{
@@ -20,249 +18,75 @@ pub struct LIRAttribute {
 impl LIRAttribute {
 	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
 		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
-			CPTag::Utf8 { bytes } => paw_mutf8::decode(&bytes)?.into_owned(),
+			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
 			_ => unreachable!(),
 		};
 		eprintln!("parsing attr {}", name);
 
-		let mut attr_buf = Cursor::new(raw.info);
+		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
-			"ConstantValue" => {
-				if attr_buf.get_ref().len() != 2 {
-					bail!("ConstantValue attr must have length of exactly 2");
-				}
-				let index = attr_buf.read_u16::<BigEndian>().unwrap();
-				let Some(tag) = cp.get(index as usize - 1) else {
-					bail!("invalid value cp index in ConstantValue attr")
-				};
-				let value = match tag {
-					CPTag::Integer(i) => ConstantValueAttribute::Int(i.cast_signed()),
-					CPTag::Float(f) => ConstantValueAttribute::Float(*f),
-					CPTag::Long(l) => ConstantValueAttribute::Long(l.cast_signed()),
-					CPTag::Double(d) => ConstantValueAttribute::Double(*d),
-					CPTag::String { utf8_index } => ConstantValueAttribute::String(get_utf8_cp_entry(cp, *utf8_index)?),
-					_ => panic!("invalid ConstantValue attribute tag"),
-				};
-				LIRAttributeKind::ConstantValue(value)
-			}
-			"Code" => {
-				let max_stack = attr_buf.read_u16::<BigEndian>()?;
-				let max_locals = attr_buf.read_u16::<BigEndian>()?;
-				let code_len = attr_buf.read_u32::<BigEndian>()?;
-				let code = attr_buf.read_vec_with(code_len as usize, |reader| Ok(reader.read_u8()?))?;
-				let exceptions_len = attr_buf.read_u16::<BigEndian>()?;
-				let exception_table = attr_buf.read_vec_with(exceptions_len as usize, |reader| {
-					Ok(CodeAttributeException {
-						start_pc: reader.read_u16::<BigEndian>()?,
-						end_pc: reader.read_u16::<BigEndian>()?,
-						handler_pc: reader.read_u16::<BigEndian>()?,
-						catch_type: reader.read_u16::<BigEndian>()?,
-					})
-				})?;
-				let attrs_count = attr_buf.read_u16::<BigEndian>()?;
-				let mut attributes = Vec::with_capacity(usize::from(attrs_count));
-				for _ in 0..attrs_count {
-					let attr_raw = AttributeInfo::read(&mut attr_buf)?;
-					let attr = LIRAttribute::parse(attr_raw, cp)?;
-					attributes.push(attr);
-				}
-				LIRAttributeKind::Code(CodeAttribute {
-					max_stack,
-					max_locals,
-					code,
-					exception_table,
-					attributes,
-				})
-			}
-			"StackMapTable" => {
-				let entries_count = attr_buf.read_u16::<BigEndian>()?;
-				let mut entries: Vec<StackMapFrame> = Vec::with_capacity(entries_count as usize);
-				for _ in 0..entries_count {
-					entries.push(StackMapFrame::parse(&mut attr_buf)?);
-				}
-				LIRAttributeKind::StackMapTable(StackMapTableAttribute { entries })
-			}
-			"Exceptions" => {
-				let n_classes = attr_buf.read_u16::<BigEndian>()? as usize;
-				let classes = attr_buf.read_vec_with(n_classes, |b| {
-					let index = b.read_u16::<BigEndian>()?;
-					let CPTag::Class { name_index } = cp.get(index as usize - 1).ok_or_eyre("invalid nesthost idx")?
-					else {
-						bail!("A NestMembers name_index idx is not a classref");
-					};
-					get_utf8_cp_entry(cp, *name_index)
-				})?;
-				LIRAttributeKind::Exceptions(classes)
-			}
-			"InnerClasses" => {
-				let n_classes = attr_buf.read_u16::<BigEndian>()?;
-				let classes =
-					attr_buf.read_vec_with(usize::from(n_classes), |b| InnerClassesAttributeClass::parse(b, cp))?;
-				LIRAttributeKind::InnerClasses(InnerClassesAttribute { classes })
-			}
-			"EnclosingMethod" => {
-				let class_idx = attr_buf.read_u16::<BigEndian>()?;
-				let method_idx = attr_buf.read_u16::<BigEndian>()?;
-				let Some(CPTag::Class { name_index }) = cp.get(class_idx as usize - 1) else {
-					bail!("EnclosingMethod class_index did not reference a Class value")
-				};
-				let class = get_utf8_cp_entry(cp, *name_index)?;
-				let CPTag::NameAndType {
-					name_index,
-					descriptor_index,
-				} = cp.get(method_idx as usize - 1).unwrap()
-				else {
-					bail!("EnclosingMethod method_index did not reference a NameAndType value")
-				};
-				let method_name = get_utf8_cp_entry(cp, *name_index)?;
-				let method_descriptor = get_utf8_cp_entry(cp, *descriptor_index)?.parse()?;
-				LIRAttributeKind::EnclosingMethod(EnclosingMethodAttribute {
-					class,
-					method_name,
-					method_descriptor,
-				})
-			}
-			"Synthetic" => {
-				// TODO: validate that there's no data?
-				LIRAttributeKind::Synthetic
-			}
-			"Signature" => {
-				let index = attr_buf.read_u16::<BigEndian>()?;
-				let signature = get_utf8_cp_entry(cp, index)?;
-				LIRAttributeKind::Signature(signature)
-			}
-			"SourceFile" => {
-				let index = attr_buf.read_u16::<BigEndian>()?;
-				let sourcefile_utf8 = match cp.get(index as usize - 1).unwrap() {
-					CPTag::Utf8 { bytes } => paw_mutf8::decode(&bytes)?.into_owned(),
-					_ => unreachable!(),
-				};
-				LIRAttributeKind::SourceFile(sourcefile_utf8)
-			}
+			"ConstantValue" => LIRAttributeKind::ConstantValue(ConstantValueAttribute::parse(&mut buffer, cp)?),
+			"Code" => LIRAttributeKind::Code(CodeAttribute::parse(&mut buffer, cp)?),
+			"StackMapTable" => LIRAttributeKind::StackMapTable(StackMapTableAttribute::parse(&mut buffer)?),
+			"Exceptions" => LIRAttributeKind::Exceptions(ExceptionsAttribute::parse(&mut buffer, cp)?),
+			"InnerClasses" => LIRAttributeKind::InnerClasses(InnerClassesAttribute::parse(&mut buffer, cp)?),
+			"EnclosingMethod" => LIRAttributeKind::EnclosingMethod(EnclosingMethodAttribute::parse(&mut buffer, cp)?),
+			"Synthetic" => LIRAttributeKind::Synthetic,
+			"Signature" => LIRAttributeKind::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
+			"SourceFile" => LIRAttributeKind::SourceFile(SourceFileAttribute::parse(&mut buffer, cp)?),
 			"SourceDebugExtension" => {
-				let n_entries = usize::from(attr_buf.read_u16::<BigEndian>()?);
-				let debug_data = attr_buf.read_vec_with(n_entries, |b| Ok(b.read_u8()?))?;
-				LIRAttributeKind::SourceDebugExtension(debug_data)
+				LIRAttributeKind::SourceDebugExtension(DebugExtensionAttribute::parse(&mut buffer)?)
 			}
-			"LineNumberTable" => {
-				let table_len = attr_buf.read_u16::<BigEndian>()?;
-				let table = attr_buf.read_vec_with(usize::from(table_len), |reader| {
-					Ok(LineNumberTableAttributeEntry {
-						start_pc: reader.read_u16::<BigEndian>()?,
-						line_number: reader.read_u16::<BigEndian>()?,
-					})
-				})?;
-				LIRAttributeKind::LineNumberTable(LineNumberTableAttribute { table })
-			}
+			"LineNumberTable" => LIRAttributeKind::LineNumberTable(LineNumberTableAttribute::parse(&mut buffer)?),
 			"LocalVariableTable" => {
-				let num_entries = attr_buf.read_u16::<BigEndian>()?;
-				let mut table = Vec::with_capacity(usize::from(num_entries));
-				for _ in 0..num_entries {
-					table.push(LocalVariableTableEntry::read(&mut attr_buf, cp)?);
-				}
-				LIRAttributeKind::LocalVariableTable(LocalVariableTableAttribute { table })
+				LIRAttributeKind::LocalVariableTable(LocalVariableTableAttribute::parse(&mut buffer, cp)?)
 			}
 			"LocalVariableTypeTable" => {
-				let num_entries = attr_buf.read_u16::<BigEndian>()?;
-				let table = attr_buf.read_vec_with(usize::from(num_entries), |reader| {
-					LocalVariableTypeTableEntry::read(reader, cp)
-				})?;
-				LIRAttributeKind::LocalVariableTypeTable(LocalVariableTypeTableAttribute { table })
+				LIRAttributeKind::LocalVariableTypeTable(LocalVariableTypeTableAttribute::parse(&mut buffer, cp)?)
 			}
-			"Deprecated" => {
-				// TODO: validate that there's no data?
-				LIRAttributeKind::Deprecated
-			}
+			"Deprecated" => LIRAttributeKind::Deprecated,
 			"RuntimeVisibleAnnotations" => {
-				let n_annotations = attr_buf.read_u16::<BigEndian>()? as usize;
-				let annotations = attr_buf.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))?;
-				LIRAttributeKind::RuntimeVisibleAnnotations(annotations)
+				LIRAttributeKind::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
 			}
 			"RuntimeInvisibleAnnotations" => {
-				let n_annotations = attr_buf.read_u16::<BigEndian>()? as usize;
-				let annotations = attr_buf.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))?;
-				LIRAttributeKind::RuntimeInvisibleAnnotations(annotations)
+				LIRAttributeKind::RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
 			}
-			"RuntimeVisibleParameterAnnotations" => {
-				let n_params = attr_buf.read_u8()? as usize;
-				let params = attr_buf.read_vec_with(n_params, |b| {
-					let n_annotations = b.read_u16::<BigEndian>()? as usize;
-					b.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))
-				})?;
-
-				LIRAttributeKind::RuntimeVisibleParameterAnnotations(params)
-			}
-			"RuntimeInvisibleParameterAnnotations" => {
-				let n_params = attr_buf.read_u8()? as usize;
-				let params = attr_buf.read_vec_with(n_params, |b| {
-					let n_annotations = b.read_u16::<BigEndian>()? as usize;
-					b.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))
-				})?;
-				LIRAttributeKind::RuntimeInvisibleParameterAnnotations(params)
-			}
-			"RuntimeVisibleTypeAnnotations" => {
-				let n_annotations = attr_buf.read_u16::<BigEndian>()? as usize;
-				let annotations = attr_buf.read_vec_with(n_annotations, |b| RuntimeTypeAnnotation::parse(b, cp))?;
-				LIRAttributeKind::RuntimeVisibleTypeAnnotations(annotations)
-			}
-			"RuntimeInvisibleTypeAnnotations" => {
-				let n_annotations = attr_buf.read_u16::<BigEndian>()? as usize;
-				let annotations = attr_buf.read_vec_with(n_annotations, |b| RuntimeTypeAnnotation::parse(b, cp))?;
-				LIRAttributeKind::RuntimeInvisibleTypeAnnotations(annotations)
-			}
-			"AnnotationDefault" => {
-				LIRAttributeKind::AnnotationDefault(RuntimeAnnotationValue::parse(&mut attr_buf, cp)?)
-			}
+			"RuntimeVisibleParameterAnnotations" => LIRAttributeKind::RuntimeVisibleParameterAnnotations(
+				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleParameterAnnotations" => LIRAttributeKind::RuntimeInvisibleParameterAnnotations(
+				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeVisibleTypeAnnotations" => LIRAttributeKind::RuntimeVisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleTypeAnnotations" => LIRAttributeKind::RuntimeInvisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"AnnotationDefault" => LIRAttributeKind::AnnotationDefault(RuntimeAnnotationValue::parse(&mut buffer, cp)?),
 			"BootstrapMethods" => {
-				let n_methods = attr_buf.read_u16::<BigEndian>()? as usize;
-				let methods = attr_buf.read_vec_with(n_methods, |b| BootstrapMethod::parse(b, cp))?;
-				LIRAttributeKind::BootstrapMethods(methods)
+				LIRAttributeKind::BootstrapMethods(BootstrapMethodsAttribute::parse(&mut buffer, cp)?)
 			}
 			"MethodParameters" => {
-				LIRAttributeKind::MethodParameters(MethodParametersAnnotation::parse(&mut attr_buf, cp)?)
+				LIRAttributeKind::MethodParameters(MethodParametersAttribute::parse(&mut buffer, cp)?)
 			}
 			// TODO: Module
 			// TODO: ModulePackages
 			// TODO: ModuleMainClass
-			"NestHost" => {
-				let idx = attr_buf.read_u16::<BigEndian>()?;
-				let CPTag::Class { name_index } = cp.get(idx as usize - 1).ok_or_eyre("invalid nesthost idx")? else {
-					bail!("NestHost idx is not a classref");
-				};
-				LIRAttributeKind::NestHost(get_utf8_cp_entry(cp, *name_index)?)
-			}
-			"NestMembers" => {
-				let n_classes = attr_buf.read_u16::<BigEndian>()? as usize;
-				let classes = attr_buf.read_vec_with(n_classes, |b| {
-					let index = b.read_u16::<BigEndian>()?;
-					let CPTag::Class { name_index } = cp.get(index as usize - 1).ok_or_eyre("invalid nesthost idx")?
-					else {
-						bail!("A NestMembers name_index idx is not a classref");
-					};
-					get_utf8_cp_entry(cp, *name_index)
-				})?;
-				LIRAttributeKind::NestMembers(classes)
-			}
-			"Record" => {
-				let n_components = usize::from(attr_buf.read_u16::<BigEndian>()?);
-				let components = attr_buf.read_vec_with(n_components, |b| RecordComponent::parse(b, cp))?;
-				LIRAttributeKind::Record(components)
-			}
+			"NestHost" => LIRAttributeKind::NestHost(NestHostAttribute::parse(&mut buffer, cp)?),
+			"NestMembers" => LIRAttributeKind::NestMembers(NestMembersAttribute::parse(&mut buffer, cp)?),
+			"Record" => LIRAttributeKind::Record(RecordAttribute::parse(&mut buffer, cp)?),
 			"PermittedSubclasses" => {
-				let n_classes = attr_buf.read_u16::<BigEndian>()? as usize;
-				let classes = attr_buf.read_vec_with(n_classes, |b| {
-					let index = b.read_u16::<BigEndian>()?;
-					let CPTag::Class { name_index } = cp.get(index as usize - 1).ok_or_eyre("invalid nesthost idx")?
-					else {
-						bail!("A PermittedSubclasses name_index idx is not a classref");
-					};
-					get_utf8_cp_entry(cp, *name_index)
-				})?;
-				LIRAttributeKind::PermittedSubclasses(classes)
+				LIRAttributeKind::PermittedSubclasses(PermittedSubclassesAttribute::parse(&mut buffer, cp)?)
 			}
 			_ => LIRAttributeKind::Unknown(name.clone()),
 		};
 
+		let remaining = buffer.len();
+		if remaining != 0 {
+			// FIXME: reenable this when everything has moved
+			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+		}
 		Ok(LIRAttribute { name, kind })
 	}
 }
@@ -272,34 +96,33 @@ pub enum LIRAttributeKind {
 	ConstantValue(ConstantValueAttribute),
 	Code(CodeAttribute),
 	StackMapTable(StackMapTableAttribute),
-	Exceptions(Vec<String>), // list of classes declared to be thrown
+	Exceptions(ExceptionsAttribute),
 	InnerClasses(InnerClassesAttribute),
 	EnclosingMethod(EnclosingMethodAttribute),
 	Synthetic,
-	// FIXME: more structured data?
-	Signature(String),
-	SourceFile(String),
-	SourceDebugExtension(Vec<u8>),
+	Signature(SignatureAttribute),
+	SourceFile(SourceFileAttribute),
+	SourceDebugExtension(DebugExtensionAttribute),
 	LineNumberTable(LineNumberTableAttribute),
 	LocalVariableTable(LocalVariableTableAttribute),
 	LocalVariableTypeTable(LocalVariableTypeTableAttribute),
 	Deprecated,
-	RuntimeVisibleAnnotations(Vec<RuntimeAnnotation>),
-	RuntimeInvisibleAnnotations(Vec<RuntimeAnnotation>),
-	RuntimeVisibleParameterAnnotations(Vec<Vec<RuntimeAnnotation>>),
-	RuntimeInvisibleParameterAnnotations(Vec<Vec<RuntimeAnnotation>>),
-	RuntimeVisibleTypeAnnotations(Vec<RuntimeTypeAnnotation>),
-	RuntimeInvisibleTypeAnnotations(Vec<RuntimeTypeAnnotation>),
+	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeVisibleParameterAnnotations(RuntimeParameterAnnotationsAttribute),
+	RuntimeInvisibleParameterAnnotations(RuntimeParameterAnnotationsAttribute),
+	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
 	AnnotationDefault(RuntimeAnnotationValue),
-	BootstrapMethods(Vec<BootstrapMethod>),
-	MethodParameters(MethodParametersAnnotation),
+	BootstrapMethods(BootstrapMethodsAttribute),
+	MethodParameters(MethodParametersAttribute),
 	// TODO: Module
 	// TODO: ModulePackages
 	// TODO: ModuleMainClass
-	NestHost(String),         // ClassRef
-	NestMembers(Vec<String>), // Vec<ClassRef>
-	Record(Vec<RecordComponent>),
-	PermittedSubclasses(Vec<String>),
+	NestHost(NestHostAttribute),
+	NestMembers(NestMembersAttribute),
+	Record(RecordAttribute),
+	PermittedSubclasses(PermittedSubclassesAttribute),
 	Unknown(String),
 }
 
@@ -312,43 +135,93 @@ pub enum ConstantValueAttribute {
 	String(String),
 }
 
-#[derive(Debug, Clone)]
-pub struct StackMapTableAttribute {
-	pub entries: Vec<StackMapFrame>,
+impl ConstantValueAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let index = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read tag index from ConstantValue attribute")?;
+		let Some(tag) = cp.get(index as usize - 1) else {
+			bail!("cp idx {} in ConstantValue attribute was out of range", index)
+		};
+		let value = match tag {
+			CPTag::Integer(i) => ConstantValueAttribute::Int(i.cast_signed()),
+			CPTag::Float(f) => ConstantValueAttribute::Float(*f),
+			CPTag::Long(l) => ConstantValueAttribute::Long(l.cast_signed()),
+			CPTag::Double(d) => ConstantValueAttribute::Double(*d),
+			CPTag::String { utf8_index } => ConstantValueAttribute::String(get_utf8_cp_entry(cp, *utf8_index)?),
+			_ => bail!("invalid ConstantValue attribute tag {:?}", tag),
+		};
+		Ok(value)
+	}
+}
+
+#[derive(Debug, Clone, Copy, AnyBitPattern)]
+pub struct CodeAttributeException {
+	pub start_pc: u16,
+	pub end_pc: u16,
+	pub handler_pc: u16,
+	pub catch_type: u16,
 }
 
 #[derive(Debug, Clone)]
-#[repr(u8)]
-pub enum VerificationTypeInfo {
-	TopVariableInfo = 0,
-	IntegerVariableInfo = 1,
-	FloatVariableInfo = 2,
-	LongVariableInfo = 4,
-	DoubleVariableInfo = 3,
-	NullVariableInfo = 5,
-	UninitializedThisVariableInfo = 6,
-	ObjectVariableInfo { cpool_idx: u16 } = 7,
-	UninitializedVariableInfo { offset: u16 } = 8,
+pub struct CodeAttribute {
+	pub max_stack: u16,
+	pub max_locals: u16,
+	pub code: Vec<u8>,
+	pub exception_table: Vec<CodeAttributeException>,
+	pub attributes: Vec<LIRAttribute>,
 }
 
-impl VerificationTypeInfo {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
-		let tag = buffer.read_u8()?;
-		Ok(match tag {
-			0 => Self::TopVariableInfo,
-			1 => Self::IntegerVariableInfo,
-			2 => Self::FloatVariableInfo,
-			4 => Self::LongVariableInfo,
-			3 => Self::DoubleVariableInfo,
-			5 => Self::NullVariableInfo,
-			6 => Self::UninitializedThisVariableInfo,
-			7 => Self::ObjectVariableInfo {
-				cpool_idx: buffer.read_u16::<BigEndian>()?,
-			},
-			8 => Self::UninitializedVariableInfo {
-				offset: buffer.read_u16::<BigEndian>()?,
-			},
-			tag => bail!("Unrecognized verification type info tag: {tag}"),
+impl CodeAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let max_stack = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read max_stack from Code attribute")?;
+		let max_locals = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read max_locals from Code attribute")?;
+		let code_len = buffer
+			.read_u32::<BigEndian>()
+			.wrap_err("failed to read code_length from Code attribute")?;
+		let code = buffer.read_vec_with(code_len as usize, |reader| {
+			reader
+				.read_u8()
+				.wrap_err("failed to read code data from Code attribute")
+		})?;
+		let exceptions_len = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read exception_table_length from Code attribute")?;
+		let exception_table = buffer.read_vec_with(exceptions_len as usize, |reader| {
+			Ok(CodeAttributeException {
+				start_pc: reader
+					.read_u16::<BigEndian>()
+					.wrap_err("failed to read exception_table start_pc from Code attribute")?,
+				end_pc: reader
+					.read_u16::<BigEndian>()
+					.wrap_err("failed to read exception_table end_pc from Code attribute")?,
+				handler_pc: reader
+					.read_u16::<BigEndian>()
+					.wrap_err("failed to read exception_table handler_pc from Code attribute")?,
+				catch_type: reader
+					.read_u16::<BigEndian>()
+					.wrap_err("failed to read exception_table catch_type from Code attribute")?,
+			})
+		})?;
+		let attrs_count = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read attributes_count from Code attribute")?,
+		);
+		let attributes = buffer.read_vec_with(attrs_count, |b| {
+			let raw = AttributeInfo::read(b).wrap_err("failed to read attribute from Code attribute")?;
+			LIRAttribute::parse(raw, cp)
+		})?;
+		Ok(CodeAttribute {
+			max_stack,
+			max_locals,
+			code,
+			exception_table,
+			attributes,
 		})
 	}
 }
@@ -399,7 +272,7 @@ impl StackMapFrame {
 
 	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
 		let frame_type = buffer.read_u8()?;
-		Ok(match frame_type {
+		let frame = match frame_type {
 			0..=63 => Self::SameFrame { frame_type },
 			64..=127 => Self::SameLocals1StackItemFrame {
 				frame_type,
@@ -448,9 +321,55 @@ impl StackMapFrame {
 					stack,
 				}
 			}
+			_ => bail!("invalid frame tag {frame_type}"),
+		};
+		Ok(frame)
+	}
+}
 
-			_ => panic!("invalid frame tag {frame_type}"),
-		})
+#[derive(Debug, Clone)]
+pub struct StackMapTableAttribute {
+	pub entries: Vec<StackMapFrame>,
+}
+
+impl StackMapTableAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+		let entries_count = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read number_of_entries from StackMapTable attribute")?,
+		);
+		let entries = buffer.read_vec_with(entries_count, StackMapFrame::parse)?;
+		Ok(StackMapTableAttribute { entries })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct ExceptionsAttribute {
+	exception_classes: Vec<String>,
+}
+
+impl ExceptionsAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let num_exceptions = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read number_of_exceptions from Exceptions attribute")?,
+		);
+		let exception_classes = buffer.read_vec_with(num_exceptions, |b| {
+			let index = usize::from(
+				b.read_u16::<BigEndian>()
+					.wrap_err("failed to read exception_index from Exceptions attribute")?,
+			);
+			let tag = cp
+				.get(index - 1)
+				.ok_or_else(|| eyre!("cp idx {} in Exceptions attribute was out of range", index))?;
+			let CPTag::Class { name_index } = tag else {
+				bail!("invalid Exceptions attribute table tag {:?}", tag);
+			};
+			get_utf8_cp_entry(cp, *name_index)
+		})?;
+		Ok(Self { exception_classes })
 	}
 }
 
@@ -510,21 +429,111 @@ pub struct InnerClassesAttribute {
 	pub classes: Vec<InnerClassesAttributeClass>,
 }
 
-#[derive(Debug, Clone, Copy, AnyBitPattern)]
-pub struct CodeAttributeException {
-	pub start_pc: u16,
-	pub end_pc: u16,
-	pub handler_pc: u16,
-	pub catch_type: u16,
+impl InnerClassesAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_classes = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read number_of_classes from InnerClasses attribute")?,
+		);
+		let classes = buffer.read_vec_with(n_classes, |b| InnerClassesAttributeClass::parse(b, cp))?;
+		Ok(InnerClassesAttribute { classes })
+	}
 }
 
 #[derive(Debug, Clone)]
-pub struct CodeAttribute {
-	pub max_stack: u16,
-	pub max_locals: u16,
-	pub code: Vec<u8>,
-	pub exception_table: Vec<CodeAttributeException>,
-	pub attributes: Vec<LIRAttribute>,
+pub struct EnclosingMethodAttribute {
+	pub class: String,
+	pub method_name: String,
+	pub method_descriptor: MethodDescriptor,
+}
+
+impl EnclosingMethodAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let class_idx = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read class_index from EnclosingMethod attribute")?,
+		);
+		let method_idx = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read method_index from EnclosingMethod attribute")?,
+		);
+		let tag = cp
+			.get(class_idx - 1)
+			.ok_or_else(|| eyre!("class_idx {} in EnclosingMethod attribute was out of range", class_idx))?;
+		let CPTag::Class { name_index } = tag else {
+			bail!("invalid EnclosingMethod attribute class tag {:?}", tag);
+		};
+		let class = get_utf8_cp_entry(cp, *name_index)?;
+
+		let tag = cp.get(method_idx - 1).ok_or_else(|| {
+			eyre!(
+				"method_idx {} in EnclosingMethod attribute was out of range",
+				method_idx
+			)
+		})?;
+		let CPTag::NameAndType {
+			name_index,
+			descriptor_index,
+		} = tag
+		else {
+			bail!("invalid EnclosingMethod attribute method tag {:?}", tag);
+		};
+		let method_name = get_utf8_cp_entry(cp, *name_index)?;
+		let method_descriptor = get_utf8_cp_entry(cp, *descriptor_index)?.parse()?;
+		Ok(EnclosingMethodAttribute {
+			class,
+			method_name,
+			method_descriptor,
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct SignatureAttribute {
+	// FIXME: more structured data?
+	signature: String,
+}
+
+impl SignatureAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let signature_index = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read signature_index from Signature attribute")?;
+		let signature = get_utf8_cp_entry(cp, signature_index)?;
+		Ok(Self { signature })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceFileAttribute {
+	source_file: String,
+}
+
+impl SourceFileAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let sourcefile_index = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read sourcefile_index from SourceFile attribute")?;
+		let source_file = get_utf8_cp_entry(cp, sourcefile_index)?;
+		Ok(Self { source_file })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugExtensionAttribute {
+	debug_data: Vec<u8>,
+}
+
+impl DebugExtensionAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+		// the debug extension just uses the entire length of the attribute data
+		let mut buf = Vec::new();
+		buffer.read_to_end(&mut buf)?;
+		Ok(Self { debug_data: buf })
+	}
 }
 
 #[derive(Debug, Clone, Copy, AnyBitPattern)]
@@ -538,10 +547,25 @@ pub struct LineNumberTableAttribute {
 	pub table: Vec<LineNumberTableAttributeEntry>,
 }
 
-#[derive(Debug, Clone)]
-pub struct MethodParametersParam {
-	pub name: Option<String>, // Utf8Ref
-	pub access_flags: u16,
+impl LineNumberTableAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+		let table_len = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read line_number_table_length from LineNumberTable attribute")?,
+		);
+		let table = buffer.read_vec_with(table_len, |reader| {
+			Ok(LineNumberTableAttributeEntry {
+				start_pc: reader
+					.read_u16::<BigEndian>()
+					.wrap_err("failed to read line_number_table start_pc from LineNumberTable attribute")?,
+				line_number: reader
+					.read_u16::<BigEndian>()
+					.wrap_err("failed to read line_number_table line_number from SourceFile attribute")?,
+			})
+		})?;
+		Ok(Self { table })
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -554,7 +578,7 @@ pub struct LocalVariableTableEntry {
 }
 
 impl LocalVariableTableEntry {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
 		let start_pc = buffer.read_u16::<BigEndian>()?;
 		let len = buffer.read_u16::<BigEndian>()?;
 		let name_idx = buffer.read_u16::<BigEndian>()?;
@@ -575,6 +599,18 @@ impl LocalVariableTableEntry {
 #[derive(Debug, Clone)]
 pub struct LocalVariableTableAttribute {
 	pub table: Vec<LocalVariableTableEntry>,
+}
+
+impl LocalVariableTableAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let num_entries = usize::from(
+			buffer
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read local_variable_table_length from LocalVariableTable attribute")?,
+		);
+		let table = buffer.read_vec_with(num_entries, |b| LocalVariableTableEntry::parse(b, cp))?;
+		Ok(Self { table })
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -611,52 +647,12 @@ pub struct LocalVariableTypeTableAttribute {
 	pub table: Vec<LocalVariableTypeTableEntry>,
 }
 
-#[derive(Debug, Clone)]
-pub struct BootstrapMethod {
-	pub method: LIRMethodHandle,
-	pub arguments: Vec<CPTag>,
-}
-
-impl BootstrapMethod {
+impl LocalVariableTypeTableAttribute {
 	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		let method_idx = buffer.read_u16::<BigEndian>()?;
-		let n_args = buffer.read_u16::<BigEndian>()? as usize;
-		let argument_idxs = buffer.read_vec_with(n_args, |b| Ok(b.read_u16::<BigEndian>()?))?;
-
-		let CPTag::MethodHandle {
-			reference_kind,
-			reference_index,
-		} = cp.get(method_idx as usize - 1)
-			.ok_or_eyre("bootstrap method idx doesn't point to method handle tag")?
-		else {
-			panic!("should be method handle");
-		};
-
-		Ok(Self {
-			method: LIRMethodHandle {
-				ref_kind: LIRMethodHandleKind::try_from(*reference_kind)?,
-				ref_tag: cp
-					.get(*reference_index as usize - 1)
-					.cloned()
-					.ok_or_eyre("bootstrap method method reference idx invalid")?,
-			},
-			arguments: argument_idxs
-				.into_iter()
-				.map(|idx| {
-					cp.get(idx as usize - 1)
-						.cloned()
-						.ok_or_eyre("bootstrap method method reference idx invalid")
-				})
-				.collect::<Result<Vec<_>>>()?,
-		})
+		let num_entries = usize::from(buffer.read_u16::<BigEndian>()?);
+		let table = buffer.read_vec_with(num_entries, |reader| LocalVariableTypeTableEntry::read(reader, cp))?;
+		Ok(Self { table })
 	}
-}
-
-#[derive(Debug, Clone)]
-pub struct EnclosingMethodAttribute {
-	pub class: String,
-	pub method_name: String,
-	pub method_descriptor: MethodDescriptor,
 }
 
 #[derive(Debug, Clone)]
@@ -753,6 +749,218 @@ impl RuntimeAnnotation {
 }
 
 #[derive(Debug, Clone)]
+pub struct RuntimeAnnotationsAttribute {
+	pub annotations: Vec<RuntimeAnnotation>,
+}
+
+impl RuntimeAnnotationsAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_annotations = buffer.read_u16::<BigEndian>()? as usize;
+		let annotations = buffer.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))?;
+		Ok(Self { annotations })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeParameterAnnotation {
+	pub annotations: Vec<RuntimeAnnotation>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeParameterAnnotationsAttribute {
+	pub param_annotations: Vec<RuntimeParameterAnnotation>,
+}
+
+impl RuntimeParameterAnnotationsAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_params = usize::from(buffer.read_u8()?);
+		let param_annotations = buffer.read_vec_with(n_params, |b| {
+			let n_annotations = usize::from(b.read_u16::<BigEndian>()?);
+			Ok(RuntimeParameterAnnotation {
+				annotations: b.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))?,
+			})
+		})?;
+		Ok(Self { param_annotations })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeTypeAnnotation {
+	pub target_type: u8, // TODO: Probably shouldn't store this,
+	pub target_info: RuntimeTypeAnnotationTargetInfo,
+	pub target_path: TypePath,
+	pub ty: Descriptor, // Utf8Ref
+	pub pairs: Vec<RuntimeAnnotationElementValuePair>,
+}
+
+impl RuntimeTypeAnnotation {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let target_type = buffer.read_u8()?;
+		let target_info = RuntimeTypeAnnotationTargetInfo::parse(target_type, buffer)?;
+		let target_path = parse_type_path(buffer)?;
+
+		let type_index = buffer.read_u16::<BigEndian>()?;
+		let type_name = get_utf8_cp_entry(cp, type_index)?;
+
+		let n_pairs = buffer.read_u16::<BigEndian>()? as usize;
+		let mut pairs = Vec::with_capacity(n_pairs);
+
+		for _ in 0..n_pairs {
+			let name_idx = buffer.read_u16::<BigEndian>()?;
+			let name = get_utf8_cp_entry(cp, name_idx)?;
+
+			pairs.push(RuntimeAnnotationElementValuePair {
+				name,
+				value: RuntimeAnnotationValue::parse(buffer, cp)?,
+			});
+		}
+
+		let mut type_name = DescriptorReader::new(type_name);
+		Ok(Self {
+			target_type,
+			target_info,
+			target_path,
+			ty: type_name
+				.next()
+				.ok_or_eyre("invalid runtimetypeannotation type name")??,
+			pairs,
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeTypeAnnotationsAttribute {
+	pub annotations: Vec<RuntimeTypeAnnotation>,
+}
+
+impl RuntimeTypeAnnotationsAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_annotations = buffer.read_u16::<BigEndian>()? as usize;
+		let annotations = buffer.read_vec_with(n_annotations, |b| RuntimeTypeAnnotation::parse(b, cp))?;
+		Ok(Self { annotations })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct BootstrapMethod {
+	pub method: LIRMethodHandle,
+	pub arguments: Vec<CPTag>,
+}
+
+impl BootstrapMethod {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let method_idx = buffer.read_u16::<BigEndian>()?;
+		let n_args = buffer.read_u16::<BigEndian>()? as usize;
+		let argument_idxs = buffer.read_vec_with(n_args, |b| Ok(b.read_u16::<BigEndian>()?))?;
+
+		let CPTag::MethodHandle {
+			reference_kind,
+			reference_index,
+		} = cp.get(method_idx as usize - 1)
+			.ok_or_eyre("bootstrap method idx doesn't point to method handle tag")?
+		else {
+			panic!("should be method handle");
+		};
+
+		Ok(Self {
+			method: LIRMethodHandle {
+				ref_kind: LIRMethodHandleKind::try_from(*reference_kind)?,
+				ref_tag: cp
+					.get(*reference_index as usize - 1)
+					.cloned()
+					.ok_or_eyre("bootstrap method method reference idx invalid")?,
+			},
+			arguments: argument_idxs
+				.into_iter()
+				.map(|idx| {
+					cp.get(idx as usize - 1)
+						.cloned()
+						.ok_or_eyre("bootstrap method method reference idx invalid")
+				})
+				.collect::<Result<Vec<_>>>()?,
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct BootstrapMethodsAttribute {
+	methods: Vec<BootstrapMethod>,
+}
+
+impl BootstrapMethodsAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_methods = usize::from(buffer.read_u16::<BigEndian>()?);
+		let methods = buffer.read_vec_with(n_methods, |b| BootstrapMethod::parse(b, cp))?;
+		Ok(Self { methods })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodParameterEntry {
+	pub name: Option<String>,
+	// FIXME: document/enforce restrictions
+	// FIXME: this actually uses 0x8000 as ACC_MANDATED, we need to split out the access flags by context
+	pub access: AccessFlags,
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodParametersAttribute {
+	parameters: Vec<MethodParameterEntry>,
+}
+
+impl MethodParametersAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let param_count = usize::from(buffer.read_u8()?);
+		let parameters = buffer.read_vec_with(param_count, |b| {
+			let name_idx = b.read_u16::<BigEndian>()?;
+			let access = AccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
+			let name = if name_idx != 0 {
+				Some(get_utf8_cp_entry(cp, name_idx)?)
+			} else {
+				None
+			};
+			Ok(MethodParameterEntry { name, access })
+		})?;
+		Ok(Self { parameters })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct NestHostAttribute {
+	host_class: String,
+}
+
+impl NestHostAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let idx = buffer.read_u16::<BigEndian>()?;
+		let CPTag::Class { name_index } = cp.get(idx as usize - 1).ok_or_eyre("invalid nesthost idx")? else {
+			bail!("NestHost idx is not a classref");
+		};
+		let host_class = get_utf8_cp_entry(cp, *name_index)?;
+		Ok(Self { host_class })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct NestMembersAttribute {
+	member_classes: Vec<String>,
+}
+
+impl NestMembersAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_classes = usize::from(buffer.read_u16::<BigEndian>()?);
+		let member_classes = buffer.read_vec_with(n_classes, |b| {
+			let index = b.read_u16::<BigEndian>()?;
+			let CPTag::Class { name_index } = cp.get(index as usize - 1).ok_or_eyre("invalid nestmembers idx")? else {
+				bail!("A NestMembers name_index idx is not a classref");
+			};
+			get_utf8_cp_entry(cp, *name_index)
+		})?;
+		Ok(Self { member_classes })
+	}
+}
+
+#[derive(Debug, Clone)]
 pub struct RecordComponent {
 	pub name: String,
 	pub descriptor: Descriptor,
@@ -775,6 +983,77 @@ impl RecordComponent {
 			name,
 			descriptor,
 			attributes,
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordAttribute {
+	components: Vec<RecordComponent>,
+}
+
+impl RecordAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_components = usize::from(buffer.read_u16::<BigEndian>()?);
+		let components = buffer.read_vec_with(n_components, |b| RecordComponent::parse(b, cp))?;
+		Ok(Self { components })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct PermittedSubclassesAttribute {
+	subclasses: Vec<String>,
+}
+
+impl PermittedSubclassesAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let n_classes = buffer.read_u16::<BigEndian>()? as usize;
+		let subclasses = buffer.read_vec_with(n_classes, |b| {
+			let index = b.read_u16::<BigEndian>()?;
+			let CPTag::Class { name_index } = cp
+				.get(index as usize - 1)
+				.ok_or_eyre("invalid permitted subclasses idx")?
+			else {
+				bail!("A PermittedSubclasses name_index idx is not a classref");
+			};
+			get_utf8_cp_entry(cp, *name_index)
+		})?;
+		Ok(Self { subclasses })
+	}
+}
+
+#[derive(Debug, Clone)]
+#[repr(u8)]
+pub enum VerificationTypeInfo {
+	TopVariableInfo = 0,
+	IntegerVariableInfo = 1,
+	FloatVariableInfo = 2,
+	LongVariableInfo = 4,
+	DoubleVariableInfo = 3,
+	NullVariableInfo = 5,
+	UninitializedThisVariableInfo = 6,
+	ObjectVariableInfo { cpool_idx: u16 } = 7,
+	UninitializedVariableInfo { offset: u16 } = 8,
+}
+
+impl VerificationTypeInfo {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+		let tag = buffer.read_u8()?;
+		Ok(match tag {
+			0 => Self::TopVariableInfo,
+			1 => Self::IntegerVariableInfo,
+			2 => Self::FloatVariableInfo,
+			4 => Self::LongVariableInfo,
+			3 => Self::DoubleVariableInfo,
+			5 => Self::NullVariableInfo,
+			6 => Self::UninitializedThisVariableInfo,
+			7 => Self::ObjectVariableInfo {
+				cpool_idx: buffer.read_u16::<BigEndian>()?,
+			},
+			8 => Self::UninitializedVariableInfo {
+				offset: buffer.read_u16::<BigEndian>()?,
+			},
+			tag => bail!("Unrecognized verification type info tag: {tag}"),
 		})
 	}
 }
@@ -929,79 +1208,5 @@ impl RuntimeTypeAnnotationTargetInfo {
 
 			target_type => bail!("Unknown RuntimeTypeAnnotationTargetInfo target_type: {}", target_type),
 		})
-	}
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeTypeAnnotation {
-	pub target_type: u8, // TODO: Probably shouldn't store this,
-	pub target_info: RuntimeTypeAnnotationTargetInfo,
-	pub target_path: TypePath,
-	pub ty: Descriptor, // Utf8Ref
-	pub pairs: Vec<RuntimeAnnotationElementValuePair>,
-}
-
-impl RuntimeTypeAnnotation {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		let target_type = buffer.read_u8()?;
-		let target_info = RuntimeTypeAnnotationTargetInfo::parse(target_type, buffer)?;
-		let target_path = parse_type_path(buffer)?;
-
-		let type_index = buffer.read_u16::<BigEndian>()?;
-		let type_name = get_utf8_cp_entry(cp, type_index)?;
-
-		let n_pairs = buffer.read_u16::<BigEndian>()? as usize;
-		let mut pairs = Vec::with_capacity(n_pairs);
-
-		for _ in 0..n_pairs {
-			let name_idx = buffer.read_u16::<BigEndian>()?;
-			let name = get_utf8_cp_entry(cp, name_idx)?;
-
-			pairs.push(RuntimeAnnotationElementValuePair {
-				name,
-				value: RuntimeAnnotationValue::parse(buffer, cp)?,
-			});
-		}
-
-		let mut type_name = DescriptorReader::new(type_name);
-		Ok(Self {
-			target_type,
-			target_info,
-			target_path,
-			ty: type_name
-				.next()
-				.ok_or_eyre("invalid runtimetypeannotation type name")??,
-			pairs,
-		})
-	}
-}
-
-#[derive(Debug, Clone)]
-pub struct MethodParameterEntry {
-	pub name: Option<String>,
-	// FIXME: document/enforce restrictions
-	// FIXME: this actually uses 0x8000 as ACC_MANDATED, we need to split out the access flags by context
-	pub access: AccessFlags,
-}
-
-#[derive(Debug, Clone)]
-pub struct MethodParametersAnnotation {
-	parameters: Vec<MethodParameterEntry>,
-}
-
-impl MethodParametersAnnotation {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		let param_count = usize::from(buffer.read_u8()?);
-		let parameters = buffer.read_vec_with(param_count, |b| {
-			let name_idx = b.read_u16::<BigEndian>()?;
-			let access = AccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
-			let name = if name_idx != 0 {
-				Some(get_utf8_cp_entry(cp, name_idx)?)
-			} else {
-				None
-			};
-			Ok(MethodParameterEntry { name, access })
-		})?;
-		Ok(Self { parameters })
 	}
 }
