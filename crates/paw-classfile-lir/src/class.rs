@@ -142,6 +142,14 @@ pub fn get_utf8_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
 	Ok(s.into_owned())
 }
 
+pub fn get_optional_utf8_cp_entry(cp: &[CPTag], idx: u16) -> Result<Option<String>> {
+	if idx == 0 {
+		Ok(None)
+	} else {
+		Ok(Some(get_utf8_cp_entry(cp, idx)?))
+	}
+}
+
 pub fn get_class_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
 	let tag = cp
 		.get(idx as usize - 1)
@@ -149,6 +157,26 @@ pub fn get_class_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
 	match tag {
 		CPTag::Class { name_index } => get_utf8_cp_entry(cp, *name_index),
 		_ => bail!("expected cp idx {} to point to class tag", idx),
+	}
+}
+
+pub fn get_module_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
+	let tag = cp
+		.get(idx as usize - 1)
+		.ok_or_else(|| eyre!("invalid cp idx {}", idx))?;
+	match tag {
+		CPTag::Module { name_index } => get_utf8_cp_entry(cp, *name_index),
+		_ => bail!("expected cp idx {} to point to module tag", idx),
+	}
+}
+
+pub fn get_package_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
+	let tag = cp
+		.get(idx as usize - 1)
+		.ok_or_else(|| eyre!("invalid cp idx {}", idx))?;
+	match tag {
+		CPTag::Package { name_index } => get_utf8_cp_entry(cp, *name_index),
+		_ => bail!("expected cp idx {} to point to package tag", idx),
 	}
 }
 
@@ -191,6 +219,34 @@ mod tests {
 	fn parse_annos() -> eyre::Result<()> {
 		println!("{}", std::env::current_dir().unwrap().display());
 		for entry in fs::read_dir("../../test_data/hello_world2/").unwrap() {
+			let entry = entry.unwrap();
+			let path = entry.path();
+			if path.is_file() && path.extension().unwrap() == "class" {
+				let hello_world_class = fs::read(path).unwrap();
+				let mut cursor = Cursor::new(hello_world_class);
+				let cf = ClassFile::read(&mut cursor).unwrap();
+				let lir_cf = LIRClass::parse(cf);
+				println!("{lir_cf:#?}");
+			};
+		}
+		Ok(())
+	}
+
+	#[test]
+	fn parse_module() -> eyre::Result<()> {
+		println!("{}", std::env::current_dir().unwrap().display());
+		for entry in fs::read_dir("../../test_data/modules/out/test.module").unwrap() {
+			let entry = entry.unwrap();
+			let path = entry.path();
+			if path.is_file() && path.extension().unwrap() == "class" {
+				let hello_world_class = fs::read(path).unwrap();
+				let mut cursor = Cursor::new(hello_world_class);
+				let cf = ClassFile::read(&mut cursor).unwrap();
+				let lir_cf = LIRClass::parse(cf);
+				println!("{lir_cf:#?}");
+			};
+		}
+		for entry in fs::read_dir("../../test_data/modules/out/test.module/test").unwrap() {
 			let entry = entry.unwrap();
 			let path = entry.path();
 			if path.is_file() && path.extension().unwrap() == "class" {

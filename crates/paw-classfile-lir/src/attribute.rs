@@ -4,7 +4,10 @@ use eyre::{Context, OptionExt, Result, bail, eyre};
 use paw_classfile_format::{AccessFlags, AttributeInfo, CPTag, ext::ReadBytesExt};
 
 use crate::{
-	class::{get_class_name_cp_entry, get_utf8_cp_entry},
+	class::{
+		get_class_name_cp_entry, get_module_name_cp_entry, get_optional_utf8_cp_entry, get_package_name_cp_entry,
+		get_utf8_cp_entry,
+	},
 	descriptor::{Descriptor, DescriptorReader, MethodDescriptor},
 	method::LIRMethodHandle,
 };
@@ -34,9 +37,9 @@ pub enum LIRAttribute {
 	AnnotationDefault(RuntimeAnnotationValue),
 	BootstrapMethods(BootstrapMethodsAttribute),
 	MethodParameters(MethodParametersAttribute),
-	// TODO: Module
-	// TODO: ModulePackages
-	// TODO: ModuleMainClass
+	Module(ModuleAttribute),
+	ModulePackages(ModulePackagesAttribute),
+	ModuleMainClass(ModuleMainClassAttribute),
 	NestHost(NestHostAttribute),
 	NestMembers(NestMembersAttribute),
 	Record(RecordAttribute),
@@ -93,9 +96,9 @@ impl LIRAttribute {
 			"AnnotationDefault" => LIRAttribute::AnnotationDefault(RuntimeAnnotationValue::parse(&mut buffer, cp)?),
 			"BootstrapMethods" => LIRAttribute::BootstrapMethods(BootstrapMethodsAttribute::parse(&mut buffer, cp)?),
 			"MethodParameters" => LIRAttribute::MethodParameters(MethodParametersAttribute::parse(&mut buffer, cp)?),
-			// TODO: Module
-			// TODO: ModulePackages
-			// TODO: ModuleMainClass
+			"Module" => LIRAttribute::Module(ModuleAttribute::parse(&mut buffer, cp)?),
+			"ModulePackages" => LIRAttribute::ModulePackages(ModulePackagesAttribute::parse(&mut buffer, cp)?),
+			"ModuleMainClass" => LIRAttribute::ModuleMainClass(ModuleMainClassAttribute::parse(&mut buffer, cp)?),
 			"NestHost" => LIRAttribute::NestHost(NestHostAttribute::parse(&mut buffer, cp)?),
 			"NestMembers" => LIRAttribute::NestMembers(NestMembersAttribute::parse(&mut buffer, cp)?),
 			"Record" => LIRAttribute::Record(RecordAttribute::parse(&mut buffer, cp)?),
@@ -893,6 +896,161 @@ impl MethodParametersAttribute {
 			Ok(MethodParameterEntry { name, access })
 		})?;
 		Ok(Self { parameters })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleRequire {
+	pub module: String,
+	pub flags: u16,
+	pub version: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleExport {
+	pub package: String,
+	pub flags: u16,
+	pub exports_to: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleOpen {
+	pub package: String,
+	pub flags: u16,
+	pub opens_to: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleProvide {
+	pub service: String,
+	pub providers: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleAttribute {
+	pub name: String,
+	pub flags: u16,
+	pub version: Option<String>,
+	pub requires: Vec<ModuleRequire>,
+	pub exports: Vec<ModuleExport>,
+	pub opens: Vec<ModuleOpen>,
+	pub uses: Vec<String>,
+	pub provides: Vec<ModuleProvide>,
+}
+
+impl ModuleAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let name_index = buffer.read_u16::<BigEndian>()?;
+		let name = get_module_name_cp_entry(cp, name_index)?;
+
+		let flags = buffer.read_u16::<BigEndian>()?;
+
+		let version_index = buffer.read_u16::<BigEndian>()?;
+		let version = get_optional_utf8_cp_entry(cp, version_index)?;
+
+		let requires_count = buffer.read_u16::<BigEndian>()?;
+		let requires = buffer.read_vec_with(requires_count as usize, |b| {
+			let requires_index = b.read_u16::<BigEndian>()?;
+			let requires_flags = b.read_u16::<BigEndian>()?;
+			let requires_version_index = b.read_u16::<BigEndian>()?;
+			Ok(ModuleRequire {
+				module: get_module_name_cp_entry(cp, requires_index)?,
+				flags: requires_flags,
+				version: get_optional_utf8_cp_entry(cp, requires_version_index)?,
+			})
+		})?;
+
+		let exports_count = buffer.read_u16::<BigEndian>()?;
+		let exports = buffer.read_vec_with(exports_count as usize, |b| {
+			let exports_index = b.read_u16::<BigEndian>()?;
+			let exports_flags = b.read_u16::<BigEndian>()?;
+			let exports_to_count = b.read_u16::<BigEndian>()?;
+			let exports_to = b.read_vec_with(exports_to_count as usize, |b2| {
+				let exports_to_index = b2.read_u16::<BigEndian>()?;
+				get_module_name_cp_entry(cp, exports_to_index)
+			})?;
+			Ok(ModuleExport {
+				package: get_package_name_cp_entry(cp, exports_index)?,
+				flags: exports_flags,
+				exports_to,
+			})
+		})?;
+
+		let opens_count = buffer.read_u16::<BigEndian>()?;
+		let opens = buffer.read_vec_with(opens_count as usize, |b| {
+			let opens_index = b.read_u16::<BigEndian>()?;
+			let opens_flags = b.read_u16::<BigEndian>()?;
+			let opens_to_count = b.read_u16::<BigEndian>()?;
+			let opens_to = b.read_vec_with(opens_to_count as usize, |b2| {
+				let opens_to_index = b2.read_u16::<BigEndian>()?;
+				get_module_name_cp_entry(cp, opens_to_index)
+			})?;
+			Ok(ModuleOpen {
+				package: get_package_name_cp_entry(cp, opens_index)?,
+				flags: opens_flags,
+				opens_to,
+			})
+		})?;
+
+		let uses_count = buffer.read_u16::<BigEndian>()?;
+		let uses = buffer.read_vec_with(uses_count as usize, |b| {
+			let uses_index = b.read_u16::<BigEndian>()?;
+			get_class_name_cp_entry(cp, uses_index)
+		})?;
+
+		let provides_count = buffer.read_u16::<BigEndian>()?;
+		let provides = buffer.read_vec_with(provides_count as usize, |b| {
+			let provides_index = b.read_u16::<BigEndian>()?;
+			let provides_with_count = b.read_u16::<BigEndian>()?;
+			let providers = b.read_vec_with(provides_with_count as usize, |b2| {
+				let provides_with_index = b2.read_u16::<BigEndian>()?;
+				get_class_name_cp_entry(cp, provides_with_index)
+			})?;
+			Ok(ModuleProvide {
+				service: get_class_name_cp_entry(cp, provides_index)?,
+				providers,
+			})
+		})?;
+
+		Ok(Self {
+			name,
+			flags,
+			version,
+			requires,
+			exports,
+			opens,
+			uses,
+			provides,
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct ModulePackagesAttribute {
+	pub packages: Vec<String>,
+}
+
+impl ModulePackagesAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		let package_count = buffer.read_u16::<BigEndian>()?;
+		let packages = buffer.read_vec_with(package_count as usize, |b| {
+			let package_index = b.read_u16::<BigEndian>()?;
+			get_package_name_cp_entry(cp, package_index)
+		})?;
+		Ok(Self { packages })
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleMainClassAttribute {
+	pub main_class: String,
+}
+
+impl ModuleMainClassAttribute {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+		Ok(Self {
+			main_class: get_class_name_cp_entry(cp, buffer.read_u16::<BigEndian>()?)?,
+		})
 	}
 }
 
