@@ -1,7 +1,10 @@
 use bytemuck::AnyBitPattern;
 use byteorder::BigEndian;
 use eyre::{Context, OptionExt, Result, bail, eyre};
-use paw_classfile_format::{AccessFlags, AttributeInfo, CPTag, ext::ReadBytesExt};
+use paw_classfile_format::{
+	AttributeInfo, CPTag, InnerClassAccessFlags, ModuleAccessFlags, ModuleExportAccessFlags, ModuleOpenAccessFlags,
+	ModuleRequireAccessFlags, ParameterAccessFlags, ext::ReadBytesExt,
+};
 
 use crate::{
 	class::{
@@ -369,7 +372,7 @@ pub struct InnerClassesAttributeClass {
 	pub inner_class_info: String,         // ClassRef
 	pub outer_class_info: Option<String>, // ClassRef
 	pub inner_name: Option<String>,       // Utf8Ref
-	pub inner_class_access_flags: AccessFlags,
+	pub inner_class_access_flags: InnerClassAccessFlags,
 }
 
 impl InnerClassesAttributeClass {
@@ -377,7 +380,7 @@ impl InnerClassesAttributeClass {
 		let inner_info_idx = buffer.read_u16::<BigEndian>()?;
 		let outer_info_idx = buffer.read_u16::<BigEndian>()?;
 		let inner_name_idx = buffer.read_u16::<BigEndian>()?;
-		let inner_class_access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
+		let inner_class_access_flags = InnerClassAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 
 		let CPTag::Class {
 			name_index: inner_info_name_idx,
@@ -873,8 +876,7 @@ impl BootstrapMethodsAttribute {
 pub struct MethodParameterEntry {
 	pub name: Option<String>,
 	// FIXME: document/enforce restrictions
-	// FIXME: this actually uses 0x8000 as ACC_MANDATED, we need to split out the access flags by context
-	pub access: AccessFlags,
+	pub access: ParameterAccessFlags,
 }
 
 #[derive(Debug, Clone)]
@@ -887,7 +889,7 @@ impl MethodParametersAttribute {
 		let param_count = usize::from(buffer.read_u8()?);
 		let parameters = buffer.read_vec_with(param_count, |b| {
 			let name_idx = b.read_u16::<BigEndian>()?;
-			let access = AccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
+			let access = ParameterAccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
 			let name = if name_idx != 0 {
 				Some(get_utf8_cp_entry(cp, name_idx)?)
 			} else {
@@ -902,21 +904,21 @@ impl MethodParametersAttribute {
 #[derive(Debug, Clone)]
 pub struct ModuleRequire {
 	pub module: String,
-	pub flags: u16,
+	pub flags: ModuleRequireAccessFlags,
 	pub version: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ModuleExport {
 	pub package: String,
-	pub flags: u16,
+	pub flags: ModuleExportAccessFlags,
 	pub exports_to: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ModuleOpen {
 	pub package: String,
-	pub flags: u16,
+	pub flags: ModuleOpenAccessFlags,
 	pub opens_to: Vec<String>,
 }
 
@@ -929,7 +931,7 @@ pub struct ModuleProvide {
 #[derive(Debug, Clone)]
 pub struct ModuleAttribute {
 	pub name: String,
-	pub flags: u16,
+	pub flags: ModuleAccessFlags,
 	pub version: Option<String>,
 	pub requires: Vec<ModuleRequire>,
 	pub exports: Vec<ModuleExport>,
@@ -943,7 +945,7 @@ impl ModuleAttribute {
 		let name_index = buffer.read_u16::<BigEndian>()?;
 		let name = get_module_name_cp_entry(cp, name_index)?;
 
-		let flags = buffer.read_u16::<BigEndian>()?;
+		let flags = ModuleAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 
 		let version_index = buffer.read_u16::<BigEndian>()?;
 		let version = get_optional_utf8_cp_entry(cp, version_index)?;
@@ -951,7 +953,7 @@ impl ModuleAttribute {
 		let requires_count = buffer.read_u16::<BigEndian>()?;
 		let requires = buffer.read_vec_with(requires_count as usize, |b| {
 			let requires_index = b.read_u16::<BigEndian>()?;
-			let requires_flags = b.read_u16::<BigEndian>()?;
+			let requires_flags = ModuleRequireAccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
 			let requires_version_index = b.read_u16::<BigEndian>()?;
 			Ok(ModuleRequire {
 				module: get_module_name_cp_entry(cp, requires_index)?,
@@ -963,7 +965,7 @@ impl ModuleAttribute {
 		let exports_count = buffer.read_u16::<BigEndian>()?;
 		let exports = buffer.read_vec_with(exports_count as usize, |b| {
 			let exports_index = b.read_u16::<BigEndian>()?;
-			let exports_flags = b.read_u16::<BigEndian>()?;
+			let exports_flags = ModuleExportAccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
 			let exports_to_count = b.read_u16::<BigEndian>()?;
 			let exports_to = b.read_vec_with(exports_to_count as usize, |b2| {
 				let exports_to_index = b2.read_u16::<BigEndian>()?;
@@ -979,7 +981,7 @@ impl ModuleAttribute {
 		let opens_count = buffer.read_u16::<BigEndian>()?;
 		let opens = buffer.read_vec_with(opens_count as usize, |b| {
 			let opens_index = b.read_u16::<BigEndian>()?;
-			let opens_flags = b.read_u16::<BigEndian>()?;
+			let opens_flags = ModuleOpenAccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
 			let opens_to_count = b.read_u16::<BigEndian>()?;
 			let opens_to = b.read_vec_with(opens_to_count as usize, |b2| {
 				let opens_to_index = b2.read_u16::<BigEndian>()?;

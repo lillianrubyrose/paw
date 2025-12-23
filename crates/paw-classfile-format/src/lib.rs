@@ -30,7 +30,7 @@ pub enum ClassFileWriteError {
 pub struct ClassFile {
 	pub version: ClassFileVersion,
 	pub cp: Vec<CPTag>,
-	pub access_flags: AccessFlags,
+	pub access_flags: ClassAccessFlags,
 	pub this_class: u16,
 	pub super_class: u16,
 	pub interfaces: Vec<u16>,
@@ -50,7 +50,7 @@ impl ClassFile {
 		let major_version = buffer.read_u16::<BigEndian>()?;
 		let cp_count = buffer.read_u16::<BigEndian>()?;
 		let cp = buffer.read_vec_with(usize::from(cp_count - 1), |b| CPTag::read(b))?;
-		let access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
+		let access_flags = ClassAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 		let this_class = buffer.read_u16::<BigEndian>()?;
 		let super_class = buffer.read_u16::<BigEndian>()?;
 		let interface_count = buffer.read_u16::<BigEndian>()?;
@@ -154,19 +154,39 @@ impl AttributeInfo {
 	}
 }
 
+macro_rules! impl_access_flags {
+	($name:ident) => {
+		paste::paste! {
+		#[derive(Debug, Clone, Copy, Error)]
+		#[error("access flags contains unknown bits: {0:?}")]
+		pub struct [<Invalid $name AccessFlagsErr>]([<$name AccessFlags>]);
+		}
+
+		paste::paste! {
+		impl TryFrom<u16> for [<$name AccessFlags>] {
+			type Error = [<Invalid $name AccessFlagsErr>];
+
+			fn try_from(value: u16) -> std::result::Result<Self, Self::Error> {
+				let access_flags = [<$name AccessFlags>] ::from_bits_retain(value);
+				if [<$name AccessFlags>]::all().contains(access_flags) {
+					Ok(access_flags)
+				} else {
+					Err([<Invalid $name AccessFlagsErr>](access_flags))
+				}
+			}
+		}
+		}
+	};
+}
+
 bitflags! {
-	// FIXME: maybe have different bitflags for different things?
-	// for example private is not valid on classes
-	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-	pub struct AccessFlags: u16 {
-		const PUBLIC = 0x001;
-		const PRIVATE = 0x002;
-		const PROTECTED = 0x004;
-		const STATIC = 0x008;
-		const FINAL = 0x010;
-		const SUPER = 0x020;
-		const VOLATILE = 0x040;
-		const TRANSIENT = 0x080;
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.1
+	// Table 4.1-B
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct ClassAccessFlags: u16 {
+		const PUBLIC = 0x0001;
+		const FINAL = 0x0010;
+		const SUPER = 0x0020;
 		const INTERFACE = 0x0200;
 		const ABSTRACT = 0x0400;
 		const SYNTHETIC = 0x1000;
@@ -176,26 +196,132 @@ bitflags! {
 	}
 }
 
-#[derive(Debug, Clone, Copy, Error)]
-#[error("access flags contains unknown bits: {0:?}")]
-pub struct InvalidAccessFlagsErr(AccessFlags);
+impl_access_flags!(Class);
 
-impl TryFrom<u16> for AccessFlags {
-	type Error = InvalidAccessFlagsErr;
-
-	fn try_from(value: u16) -> std::result::Result<Self, Self::Error> {
-		let access_flags = AccessFlags::from_bits_retain(value);
-		if AccessFlags::all().contains(access_flags) {
-			Ok(access_flags)
-		} else {
-			Err(InvalidAccessFlagsErr(access_flags))
-		}
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.5
+	// Table 4.5-A
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct FieldAccessFlags: u16 {
+		const PUBLIC = 0x0001;
+		const PRIVATE = 0x0002;
+		const PROTECTED = 0x0004;
+		const STATIC = 0x0008;
+		const FINAL = 0x0010;
+		const VOLATILE = 0x0040;
+		const TRANSIENT = 0x0080;
+		const SYNTHETIC = 0x1000;
+		const ENUM = 0x4000;
 	}
 }
 
+impl_access_flags!(Field);
+
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.6
+	// Table 4.6-A
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct MethodAccessFlags: u16 {
+		const PUBLIC = 0x0001;
+		const PRIVATE = 0x0002;
+		const PROTECTED = 0x0004;
+		const STATIC = 0x0008;
+		const FINAL = 0x0010;
+		const SYNCHRONIZED = 0x0020;
+		const BRIDGE = 0x0040;
+		const VARARGS = 0x0080;
+		const NATIVE = 0x0100;
+		const ABSTRACT = 0x0400;
+		/// In a class file whose major version number is at least 46 and at most 60: Declared strictfp.
+		const STRICT = 0x0800;
+		const SYNTHETIC = 0x1000;
+	}
+}
+
+impl_access_flags!(Method);
+
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.6
+	// Table 4.7.6-A
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct InnerClassAccessFlags: u16 {
+		const PUBLIC = 0x0001;
+		const PRIVATE = 0x0002;
+		const PROTECTED = 0x0004;
+		const STATIC = 0x0008;
+		const FINAL = 0x0010;
+		const INTERFACE = 0x0200;
+		const ABSTRACT = 0x0400;
+		const SYNTHETIC = 0x1000;
+		const ANNOTATION = 0x2000;
+		const ENUM = 0x4000;
+	}
+}
+
+impl_access_flags!(InnerClass);
+
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.24
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct ParameterAccessFlags: u16 {
+		const FINAL = 0x0010;
+		const SYNTHETIC = 0x1000;
+		const MANDATED = 0x8000;
+	}
+}
+
+impl_access_flags!(Parameter);
+
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.25
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct ModuleAccessFlags: u16 {
+		const OPEN = 0x0020;
+		const SYNTHETIC = 0x1000;
+		const MANDATED = 0x8000;
+	}
+}
+
+impl_access_flags!(Module);
+
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.25
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct ModuleRequireAccessFlags: u16 {
+		const TRANSITIVE = 0x0020;
+		const STATIC_PHASE = 0x0040;
+		const SYNTHETIC = 0x1000;
+		const MANDATED = 0x8000;
+	}
+}
+
+impl_access_flags!(ModuleRequire);
+
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.25
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct ModuleExportAccessFlags: u16 {
+		const SYNTHETIC = 0x1000;
+		const MANDATED = 0x8000;
+	}
+}
+
+impl_access_flags!(ModuleExport);
+
+bitflags! {
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.25
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct ModuleOpenAccessFlags: u16 {
+		const SYNTHETIC = 0x1000;
+		const MANDATED = 0x8000;
+	}
+}
+
+impl_access_flags!(ModuleOpen);
+
 #[derive(Debug)]
 pub struct FieldInfo {
-	pub access_flags: AccessFlags,
+	pub access_flags: FieldAccessFlags,
 	pub name_index: u16,
 	pub descriptor_index: u16,
 	pub attributes: Vec<AttributeInfo>,
@@ -203,7 +329,7 @@ pub struct FieldInfo {
 
 impl FieldInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<FieldInfo> {
-		let access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
+		let access_flags = FieldAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 		let name_index = buffer.read_u16::<BigEndian>()?;
 		let descriptor_index = buffer.read_u16::<BigEndian>()?;
 		let attributes_count = buffer.read_u16::<BigEndian>()?;
@@ -237,7 +363,7 @@ impl FieldInfo {
 
 #[derive(Debug)]
 pub struct MethodInfo {
-	pub access_flags: AccessFlags,
+	pub access_flags: MethodAccessFlags,
 	pub name_index: u16,
 	pub descriptor_index: u16,
 	pub attributes: Vec<AttributeInfo>,
@@ -245,7 +371,7 @@ pub struct MethodInfo {
 
 impl MethodInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<MethodInfo> {
-		let access_flags = AccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
+		let access_flags = MethodAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 		let name_index = buffer.read_u16::<BigEndian>()?;
 		let descriptor_index = buffer.read_u16::<BigEndian>()?;
 		let attributes_count = buffer.read_u16::<BigEndian>()?;

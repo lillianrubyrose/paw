@@ -1,12 +1,12 @@
 use eyre::{Result, bail, eyre};
-use paw_classfile_format::{AccessFlags, CPTag, ClassFile, ClassFileVersion};
+use paw_classfile_format::{CPTag, ClassAccessFlags, ClassFile, ClassFileVersion};
 
 use crate::{attribute::LIRAttribute, field::LIRField, method::LIRMethod};
 
 #[derive(Debug)]
 pub struct LIRClass {
 	pub version: ClassFileVersion,
-	pub access_flags: AccessFlags,
+	pub access_flags: ClassAccessFlags,
 	pub this_class: String,          // ClassRef
 	pub super_class: Option<String>, // ClassRef
 	pub interfaces: Vec<String>,     // ClassRef

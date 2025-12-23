@@ -1,5 +1,5 @@
 use eyre::{OptionExt, bail};
-use paw_classfile_format::{AccessFlags, CPTag};
+use paw_classfile_format::{CPTag, MethodAccessFlags};
 use thiserror::Error;
 
 use crate::{
@@ -120,7 +120,7 @@ impl LIRMethodHandle {
 
 #[derive(Debug)]
 pub struct LIRMethod {
-	pub access_flags: AccessFlags,
+	pub access_flags: MethodAccessFlags,
 	pub name: String,
 	pub descriptor: MethodDescriptor,
 	pub attributes: Vec<LIRAttribute>,
