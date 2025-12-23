@@ -4,95 +4,13 @@ use eyre::{Context, OptionExt, Result, bail, eyre};
 use paw_classfile_format::{AccessFlags, AttributeInfo, CPTag, ext::ReadBytesExt};
 
 use crate::{
-	class::get_utf8_cp_entry,
+	class::{get_class_name_cp_entry, get_utf8_cp_entry},
 	descriptor::{Descriptor, DescriptorReader, MethodDescriptor},
-	method::{LIRMethodHandle, LIRMethodHandleKind},
+	method::LIRMethodHandle,
 };
 
 #[derive(Debug, Clone)]
-pub struct LIRAttribute {
-	pub name: String,
-	pub kind: LIRAttributeKind,
-}
-
-impl LIRAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
-		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
-			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
-			_ => unreachable!(),
-		};
-		eprintln!("parsing attr {}", name);
-
-		let mut buffer = raw.info.as_slice();
-		let kind = match name.as_ref() {
-			"ConstantValue" => LIRAttributeKind::ConstantValue(ConstantValueAttribute::parse(&mut buffer, cp)?),
-			"Code" => LIRAttributeKind::Code(CodeAttribute::parse(&mut buffer, cp)?),
-			"StackMapTable" => LIRAttributeKind::StackMapTable(StackMapTableAttribute::parse(&mut buffer)?),
-			"Exceptions" => LIRAttributeKind::Exceptions(ExceptionsAttribute::parse(&mut buffer, cp)?),
-			"InnerClasses" => LIRAttributeKind::InnerClasses(InnerClassesAttribute::parse(&mut buffer, cp)?),
-			"EnclosingMethod" => LIRAttributeKind::EnclosingMethod(EnclosingMethodAttribute::parse(&mut buffer, cp)?),
-			"Synthetic" => LIRAttributeKind::Synthetic,
-			"Signature" => LIRAttributeKind::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
-			"SourceFile" => LIRAttributeKind::SourceFile(SourceFileAttribute::parse(&mut buffer, cp)?),
-			"SourceDebugExtension" => {
-				LIRAttributeKind::SourceDebugExtension(DebugExtensionAttribute::parse(&mut buffer)?)
-			}
-			"LineNumberTable" => LIRAttributeKind::LineNumberTable(LineNumberTableAttribute::parse(&mut buffer)?),
-			"LocalVariableTable" => {
-				LIRAttributeKind::LocalVariableTable(LocalVariableTableAttribute::parse(&mut buffer, cp)?)
-			}
-			"LocalVariableTypeTable" => {
-				LIRAttributeKind::LocalVariableTypeTable(LocalVariableTypeTableAttribute::parse(&mut buffer, cp)?)
-			}
-			"Deprecated" => LIRAttributeKind::Deprecated,
-			"RuntimeVisibleAnnotations" => {
-				LIRAttributeKind::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
-			}
-			"RuntimeInvisibleAnnotations" => {
-				LIRAttributeKind::RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
-			}
-			"RuntimeVisibleParameterAnnotations" => LIRAttributeKind::RuntimeVisibleParameterAnnotations(
-				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
-			),
-			"RuntimeInvisibleParameterAnnotations" => LIRAttributeKind::RuntimeInvisibleParameterAnnotations(
-				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
-			),
-			"RuntimeVisibleTypeAnnotations" => LIRAttributeKind::RuntimeVisibleTypeAnnotations(
-				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
-			),
-			"RuntimeInvisibleTypeAnnotations" => LIRAttributeKind::RuntimeInvisibleTypeAnnotations(
-				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
-			),
-			"AnnotationDefault" => LIRAttributeKind::AnnotationDefault(RuntimeAnnotationValue::parse(&mut buffer, cp)?),
-			"BootstrapMethods" => {
-				LIRAttributeKind::BootstrapMethods(BootstrapMethodsAttribute::parse(&mut buffer, cp)?)
-			}
-			"MethodParameters" => {
-				LIRAttributeKind::MethodParameters(MethodParametersAttribute::parse(&mut buffer, cp)?)
-			}
-			// TODO: Module
-			// TODO: ModulePackages
-			// TODO: ModuleMainClass
-			"NestHost" => LIRAttributeKind::NestHost(NestHostAttribute::parse(&mut buffer, cp)?),
-			"NestMembers" => LIRAttributeKind::NestMembers(NestMembersAttribute::parse(&mut buffer, cp)?),
-			"Record" => LIRAttributeKind::Record(RecordAttribute::parse(&mut buffer, cp)?),
-			"PermittedSubclasses" => {
-				LIRAttributeKind::PermittedSubclasses(PermittedSubclassesAttribute::parse(&mut buffer, cp)?)
-			}
-			_ => LIRAttributeKind::Unknown(name.clone()),
-		};
-
-		let remaining = buffer.len();
-		if remaining != 0 {
-			// FIXME: reenable this when everything has moved
-			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
-		}
-		Ok(LIRAttribute { name, kind })
-	}
-}
-
-#[derive(Debug, Clone)]
-pub enum LIRAttributeKind {
+pub enum LIRAttribute {
 	ConstantValue(ConstantValueAttribute),
 	Code(CodeAttribute),
 	StackMapTable(StackMapTableAttribute),
@@ -124,6 +42,76 @@ pub enum LIRAttributeKind {
 	Record(RecordAttribute),
 	PermittedSubclasses(PermittedSubclassesAttribute),
 	Unknown(String),
+}
+
+impl LIRAttribute {
+	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
+		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
+			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
+			_ => unreachable!(),
+		};
+		eprintln!("parsing attr {}", name);
+
+		let mut buffer = raw.info.as_slice();
+		let kind = match name.as_ref() {
+			"ConstantValue" => LIRAttribute::ConstantValue(ConstantValueAttribute::parse(&mut buffer, cp)?),
+			"Code" => LIRAttribute::Code(CodeAttribute::parse(&mut buffer, cp)?),
+			"StackMapTable" => LIRAttribute::StackMapTable(StackMapTableAttribute::parse(&mut buffer, cp)?),
+			"Exceptions" => LIRAttribute::Exceptions(ExceptionsAttribute::parse(&mut buffer, cp)?),
+			"InnerClasses" => LIRAttribute::InnerClasses(InnerClassesAttribute::parse(&mut buffer, cp)?),
+			"EnclosingMethod" => LIRAttribute::EnclosingMethod(EnclosingMethodAttribute::parse(&mut buffer, cp)?),
+			"Synthetic" => LIRAttribute::Synthetic,
+			"Signature" => LIRAttribute::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
+			"SourceFile" => LIRAttribute::SourceFile(SourceFileAttribute::parse(&mut buffer, cp)?),
+			"SourceDebugExtension" => LIRAttribute::SourceDebugExtension(DebugExtensionAttribute::parse(&mut buffer)?),
+			"LineNumberTable" => LIRAttribute::LineNumberTable(LineNumberTableAttribute::parse(&mut buffer)?),
+			"LocalVariableTable" => {
+				LIRAttribute::LocalVariableTable(LocalVariableTableAttribute::parse(&mut buffer, cp)?)
+			}
+			"LocalVariableTypeTable" => {
+				LIRAttribute::LocalVariableTypeTable(LocalVariableTypeTableAttribute::parse(&mut buffer, cp)?)
+			}
+			"Deprecated" => LIRAttribute::Deprecated,
+			"RuntimeVisibleAnnotations" => {
+				LIRAttribute::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeInvisibleAnnotations" => {
+				LIRAttribute::RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeVisibleParameterAnnotations" => LIRAttribute::RuntimeVisibleParameterAnnotations(
+				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleParameterAnnotations" => LIRAttribute::RuntimeInvisibleParameterAnnotations(
+				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeVisibleTypeAnnotations" => {
+				LIRAttribute::RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeInvisibleTypeAnnotations" => {
+				LIRAttribute::RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"AnnotationDefault" => LIRAttribute::AnnotationDefault(RuntimeAnnotationValue::parse(&mut buffer, cp)?),
+			"BootstrapMethods" => LIRAttribute::BootstrapMethods(BootstrapMethodsAttribute::parse(&mut buffer, cp)?),
+			"MethodParameters" => LIRAttribute::MethodParameters(MethodParametersAttribute::parse(&mut buffer, cp)?),
+			// TODO: Module
+			// TODO: ModulePackages
+			// TODO: ModuleMainClass
+			"NestHost" => LIRAttribute::NestHost(NestHostAttribute::parse(&mut buffer, cp)?),
+			"NestMembers" => LIRAttribute::NestMembers(NestMembersAttribute::parse(&mut buffer, cp)?),
+			"Record" => LIRAttribute::Record(RecordAttribute::parse(&mut buffer, cp)?),
+			"PermittedSubclasses" => {
+				LIRAttribute::PermittedSubclasses(PermittedSubclassesAttribute::parse(&mut buffer, cp)?)
+			}
+			_ => LIRAttribute::Unknown(name.clone()),
+		};
+
+		let remaining = buffer.len();
+		if remaining != 0 {
+			// FIXME: reenable this when everything has moved
+			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+		}
+		Ok(kind)
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -270,17 +258,17 @@ impl StackMapFrame {
 		}
 	}
 
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
 		let frame_type = buffer.read_u8()?;
 		let frame = match frame_type {
 			0..=63 => Self::SameFrame { frame_type },
 			64..=127 => Self::SameLocals1StackItemFrame {
 				frame_type,
-				stack: VerificationTypeInfo::parse(buffer)?,
+				stack: VerificationTypeInfo::parse(buffer, cp)?,
 			},
 			247 => Self::SameLocals1StackItemFrameExtended {
 				offset_delta: buffer.read_u16::<BigEndian>()?,
-				stack: VerificationTypeInfo::parse(buffer)?,
+				stack: VerificationTypeInfo::parse(buffer, cp)?,
 			},
 			248..=250 => Self::ChopFrame {
 				/*
@@ -298,7 +286,7 @@ impl StackMapFrame {
 				let offset_delta = buffer.read_u16::<BigEndian>()?;
 
 				let n_locals = (frame_type - 251) as usize;
-				let locals = buffer.read_vec_with(n_locals, |b| VerificationTypeInfo::parse(b))?;
+				let locals = buffer.read_vec_with(n_locals, |b| VerificationTypeInfo::parse(b, cp))?;
 				Self::AppendFrame { offset_delta, locals }
 			}
 			255 => {
@@ -306,13 +294,13 @@ impl StackMapFrame {
 				let n_locals = buffer.read_u16::<BigEndian>()? as usize;
 				let mut locals = Vec::with_capacity(n_locals);
 				for _ in 0..n_locals {
-					locals.push(VerificationTypeInfo::parse(buffer)?);
+					locals.push(VerificationTypeInfo::parse(buffer, cp)?);
 				}
 
 				let n_stack = buffer.read_u16::<BigEndian>()? as usize;
 				let mut stack = Vec::with_capacity(n_stack);
 				for _ in 0..n_stack {
-					stack.push(VerificationTypeInfo::parse(buffer)?);
+					stack.push(VerificationTypeInfo::parse(buffer, cp)?);
 				}
 
 				Self::FullFrame {
@@ -333,13 +321,13 @@ pub struct StackMapTableAttribute {
 }
 
 impl StackMapTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
 		let entries_count = usize::from(
 			buffer
 				.read_u16::<BigEndian>()
 				.wrap_err("failed to read number_of_entries from StackMapTable attribute")?,
 		);
-		let entries = buffer.read_vec_with(entries_count, StackMapFrame::parse)?;
+		let entries = buffer.read_vec_with(entries_count, |b| StackMapFrame::parse(b, cp))?;
 		Ok(StackMapTableAttribute { entries })
 	}
 }
@@ -786,7 +774,6 @@ impl RuntimeParameterAnnotationsAttribute {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeTypeAnnotation {
-	pub target_type: u8, // TODO: Probably shouldn't store this,
 	pub target_info: RuntimeTypeAnnotationTargetInfo,
 	pub target_path: TypePath,
 	pub ty: Descriptor, // Utf8Ref
@@ -817,7 +804,6 @@ impl RuntimeTypeAnnotation {
 
 		let mut type_name = DescriptorReader::new(type_name);
 		Ok(Self {
-			target_type,
 			target_info,
 			target_path,
 			ty: type_name
@@ -844,7 +830,7 @@ impl RuntimeTypeAnnotationsAttribute {
 #[derive(Debug, Clone)]
 pub struct BootstrapMethod {
 	pub method: LIRMethodHandle,
-	pub arguments: Vec<CPTag>,
+	pub arguments: Vec<CPTag>, // FIXME: Don't store CPTag directly, should be its own union, what tags are valid arguments?
 }
 
 impl BootstrapMethod {
@@ -853,23 +839,8 @@ impl BootstrapMethod {
 		let n_args = buffer.read_u16::<BigEndian>()? as usize;
 		let argument_idxs = buffer.read_vec_with(n_args, |b| Ok(b.read_u16::<BigEndian>()?))?;
 
-		let CPTag::MethodHandle {
-			reference_kind,
-			reference_index,
-		} = cp.get(method_idx as usize - 1)
-			.ok_or_eyre("bootstrap method idx doesn't point to method handle tag")?
-		else {
-			panic!("should be method handle");
-		};
-
 		Ok(Self {
-			method: LIRMethodHandle {
-				ref_kind: LIRMethodHandleKind::try_from(*reference_kind)?,
-				ref_tag: cp
-					.get(*reference_index as usize - 1)
-					.cloned()
-					.ok_or_eyre("bootstrap method method reference idx invalid")?,
-			},
+			method: LIRMethodHandle::resolve(cp, method_idx)?,
 			arguments: argument_idxs
 				.into_iter()
 				.map(|idx| {
@@ -1032,12 +1003,12 @@ pub enum VerificationTypeInfo {
 	DoubleVariableInfo = 3,
 	NullVariableInfo = 5,
 	UninitializedThisVariableInfo = 6,
-	ObjectVariableInfo { cpool_idx: u16 } = 7,
+	ObjectVariableInfo { class_name: String } = 7,
 	UninitializedVariableInfo { offset: u16 } = 8,
 }
 
 impl VerificationTypeInfo {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
 		let tag = buffer.read_u8()?;
 		Ok(match tag {
 			0 => Self::TopVariableInfo,
@@ -1048,7 +1019,7 @@ impl VerificationTypeInfo {
 			5 => Self::NullVariableInfo,
 			6 => Self::UninitializedThisVariableInfo,
 			7 => Self::ObjectVariableInfo {
-				cpool_idx: buffer.read_u16::<BigEndian>()?,
+				class_name: get_class_name_cp_entry(cp, buffer.read_u16::<BigEndian>()?)?,
 			},
 			8 => Self::UninitializedVariableInfo {
 				offset: buffer.read_u16::<BigEndian>()?,

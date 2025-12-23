@@ -1,16 +1,11 @@
 use eyre::{Result, bail, eyre};
 use paw_classfile_format::{AccessFlags, CPTag, ClassFile, ClassFileVersion};
 
-use crate::{
-	attribute::{LIRAttribute, LIRAttributeKind},
-	field::LIRField,
-	method::LIRMethod,
-};
+use crate::{attribute::LIRAttribute, field::LIRField, method::LIRMethod};
 
 #[derive(Debug)]
 pub struct LIRClass {
 	pub version: ClassFileVersion,
-	pub cp: Vec<CPTag>,
 	pub access_flags: AccessFlags,
 	pub this_class: String,          // ClassRef
 	pub super_class: Option<String>, // ClassRef
@@ -118,18 +113,13 @@ impl LIRClass {
 		dbg!(&attributes);
 
 		for attr in attributes.iter() {
-			if let LIRAttribute {
-				kind: LIRAttributeKind::Unknown(val),
-				..
-			} = attr
-			{
+			if let LIRAttribute::Unknown(val) = attr {
 				panic!("unknown attribute `{}` in class `{}`", val, this_class)
 			}
 		}
 
 		LIRClass {
 			version,
-			cp,
 			access_flags,
 			this_class,
 			super_class,
@@ -150,6 +140,16 @@ pub fn get_utf8_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
 	};
 	let s = paw_mutf8::decode(bytes)?;
 	Ok(s.into_owned())
+}
+
+pub fn get_class_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
+	let tag = cp
+		.get(idx as usize - 1)
+		.ok_or_else(|| eyre!("invalid cp idx {}", idx))?;
+	match tag {
+		CPTag::Class { name_index } => get_utf8_cp_entry(cp, *name_index),
+		_ => bail!("expected cp idx {} to point to class tag", idx),
+	}
 }
 
 #[cfg(test)]
