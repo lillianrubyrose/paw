@@ -1,0 +1,11 @@
+[package]
+name = "paw_bin"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eyre.workspace = true
+color-eyre.workspace = true
+
+paw_classfile_format = { path = "../paw-classfile-format" }
+paw_classfile_lir = { path = "../paw-classfile-lir" }

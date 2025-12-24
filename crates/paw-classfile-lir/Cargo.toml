@@ -10,6 +10,7 @@ paw_mutf8 = { path = "../paw-mutf8" }
 byteorder.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
+eyre.workspace = true
+color-eyre.workspace = true
+
 bitflags = "2.10.0"
-eyre = "0.6.12"
-color-eyre = "0.6.5"
