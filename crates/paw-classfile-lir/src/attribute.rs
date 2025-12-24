@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use bytemuck::AnyBitPattern;
 use byteorder::BigEndian;
 use eyre::{Context, OptionExt, Result, bail, eyre};
@@ -12,6 +14,7 @@ use crate::{
 		get_utf8_cp_entry,
 	},
 	descriptor::{Descriptor, DescriptorReader, MethodDescriptor},
+	instruction::Instruction,
 	method::LIRMethodHandle,
 };
 
@@ -161,7 +164,7 @@ pub struct CodeAttributeException {
 pub struct CodeAttribute {
 	pub max_stack: u16,
 	pub max_locals: u16,
-	pub code: Vec<u8>,
+	pub code: Vec<Instruction>,
 	pub exception_table: Vec<CodeAttributeException>,
 	pub attributes: Vec<LIRAttribute>,
 }
@@ -210,6 +213,15 @@ impl CodeAttribute {
 			let raw = AttributeInfo::read(b).wrap_err("failed to read attribute from Code attribute")?;
 			LIRAttribute::parse(raw, cp)
 		})?;
+
+		let mut code_buffer = Cursor::new(code);
+		let mut code = Vec::new();
+		while code_buffer.position() < code_buffer.get_ref().len() as u64 {
+			let instruction = Instruction::parse(&mut code_buffer, cp)?;
+			println!("parsed: {:?}", instruction);
+			code.push(instruction);
+		}
+
 		Ok(CodeAttribute {
 			max_stack,
 			max_locals,

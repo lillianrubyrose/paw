@@ -1,7 +1,11 @@
 use eyre::{Result, bail, eyre};
 use paw_classfile_format::{CPTag, ClassAccessFlags, ClassFile, ClassFileVersion};
 
-use crate::{attribute::LIRAttribute, field::LIRField, method::LIRMethod};
+use crate::{
+	attribute::{BootstrapMethod, LIRAttribute},
+	field::LIRField,
+	method::LIRMethod,
+};
 
 #[derive(Debug)]
 pub struct LIRClass {
