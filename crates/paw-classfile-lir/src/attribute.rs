@@ -157,13 +157,13 @@ pub enum LIRMethodAttribute {
 }
 
 impl LIRMethodAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool, class_attrs: &[LIRClassAttribute]) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
-			"Code" => LIRMethodAttribute::Code(CodeAttribute::parse(&mut buffer, cp)?),
+			"Code" => LIRMethodAttribute::Code(CodeAttribute::parse(&mut buffer, cp, class_attrs)?),
 			"Exceptions" => LIRMethodAttribute::Exceptions(ExceptionsAttribute::parse(&mut buffer, cp)?),
 			"Synthetic" => LIRMethodAttribute::Synthetic,
 			"Deprecated" => LIRMethodAttribute::Deprecated,
@@ -211,7 +211,7 @@ pub enum LIRCodeAttribute {
 }
 
 impl LIRCodeAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool, class_attrs: &[LIRClassAttribute]) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
@@ -334,7 +334,11 @@ pub struct CodeAttribute {
 }
 
 impl CodeAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(
+		buffer: &mut B,
+		cp: &ConstantPool,
+		class_attrs: &[LIRClassAttribute],
+	) -> Result<Self> {
 		let max_stack = buffer
 			.read_u16::<BigEndian>()
 			.wrap_err("failed to read max_stack from Code attribute")?;
@@ -375,13 +379,13 @@ impl CodeAttribute {
 		);
 		let attributes = buffer.read_vec_with(attrs_count, |b| {
 			let raw = AttributeInfo::read(b).wrap_err("failed to read attribute from Code attribute")?;
-			LIRCodeAttribute::parse(raw, cp)
+			LIRCodeAttribute::parse(raw, cp, class_attrs)
 		})?;
 
 		let mut code_buffer = Cursor::new(code);
 		let mut code = Vec::new();
 		while code_buffer.position() < code_buffer.get_ref().len() as u64 {
-			let instruction = Instruction::parse(&mut code_buffer, cp)?;
+			let instruction = Instruction::parse(&mut code_buffer, cp, class_attrs)?;
 			println!("parsed: {:?}", instruction);
 			code.push(instruction);
 		}
@@ -980,7 +984,7 @@ impl BootstrapMethod {
 
 #[derive(Debug, Clone)]
 pub struct BootstrapMethodsAttribute {
-	methods: Vec<BootstrapMethod>,
+	pub methods: Vec<BootstrapMethod>,
 }
 
 impl BootstrapMethodsAttribute {

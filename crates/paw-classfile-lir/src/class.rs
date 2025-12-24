@@ -36,13 +36,13 @@ impl LIRClass {
 			.map(|idx| -> Result<String> { Ok(cp.resolve_class_name(cp.get_class(*idx)?)?) })
 			.collect::<Result<Vec<String>>>()?;
 
-		let attributes = raw
+		let class_attrs = raw
 			.attributes
 			.into_iter()
 			.map(|attr| LIRClassAttribute::parse(attr, &cp))
 			.collect::<Result<Vec<_>>>()
 			.unwrap();
-		dbg!(&attributes);
+		dbg!(&class_attrs);
 
 		let fields = raw
 			.fields
@@ -78,7 +78,7 @@ impl LIRClass {
 				let attributes = mi
 					.attributes
 					.into_iter()
-					.map(|attr| LIRMethodAttribute::parse(attr, &cp))
+					.map(|attr| LIRMethodAttribute::parse(attr, &cp, &class_attrs))
 					.collect::<Result<Vec<_>>>()
 					.unwrap();
 				Ok(LIRMethod {
@@ -92,7 +92,7 @@ impl LIRClass {
 		dbg!(&methods);
 
 		// FIXME: visit all attributes to validate
-		for attr in attributes.iter() {
+		for attr in class_attrs.iter() {
 			if let LIRClassAttribute::Unknown(val) = attr {
 				panic!("unknown attribute `{}` in class `{}`", val, this_class)
 			}
@@ -106,7 +106,7 @@ impl LIRClass {
 			interfaces,
 			fields,
 			methods,
-			attributes,
+			attributes: class_attrs,
 		})
 	}
 }

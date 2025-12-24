@@ -1,5 +1,5 @@
 use byteorder::BigEndian;
-use eyre::{Result, bail};
+use eyre::{OptionExt, Result, bail};
 use paw_classfile_format::{
 	CPTag,
 	class_pool::{ClassTag, ConstantPool, InterfaceMethodRefTag, MethodRefTag, MethodTypeTag, StringTag},
@@ -7,7 +7,7 @@ use paw_classfile_format::{
 	ext::ReadBytesExt,
 };
 
-use crate::method::LIRMethodHandle;
+use crate::{attribute::LIRClassAttribute, method::LIRMethodHandle};
 
 pub mod opcodes {
 	pub const ACONST_NULL: u8 = 0x1;
@@ -186,7 +186,11 @@ impl Instruction {
 		}
 	}
 
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(
+		buffer: &mut B,
+		cp: &ConstantPool,
+		class_attrs: &[LIRClassAttribute],
+	) -> Result<Self> {
 		let opcode = buffer.read_u8()?;
 		Ok(match opcode {
 			opcodes::ACONST_NULL => Instruction::AConstNull,
@@ -336,12 +340,36 @@ impl Instruction {
 			opcodes::INVOKE_DYNAMIC => {
 				let index = buffer.read_u16::<BigEndian>()?;
 
+				if buffer.read_u8()? != 0 {
+					bail!("Invalid opcode for INVOKE_DYNAMIC");
+				}
+				if buffer.read_u8()? != 0 {
+					bail!("Invalid opcode for INVOKE_DYNAMIC");
+				}
+
 				let tag = cp.get_invoke_dynamic(index)?;
-				todo!("get bsm from class attributes");
+				let bootstrap_methods = class_attrs
+					.iter()
+					.find_map(|attr| match attr {
+						LIRClassAttribute::BootstrapMethods(attr) => Some(attr),
+						_ => None,
+					})
+					.ok_or_eyre("class had INVOKE_DYNAMIC but did not have a BootstrapMethods attr")?;
+				let bsm = bootstrap_methods
+					.methods
+					.get(tag.bootstrap_method_attr_index as usize)
+					.cloned()
+					.unwrap();
 
 				let nat = cp.get_name_and_type(tag.name_and_ty_index)?;
 				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
-				todo!()
+				Self::InvokeDynamic {
+					owner: bsm.method.owner,
+					name,
+					descriptor,
+					is_interface: bsm.method.is_interface,
+					bsm_args: bsm.arguments,
+				}
 			}
 
 			opcodes::MONITOREXIT => Instruction::MonitorExit,
