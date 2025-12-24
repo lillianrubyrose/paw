@@ -1,8 +1,8 @@
-use eyre::{Result, bail, eyre};
-use paw_classfile_format::{ClassAccessFlags, ClassFile, ClassFileVersion, class_pool::CPTag};
+use eyre::Result;
+use paw_classfile_format::{ClassAccessFlags, ClassFile, ClassFileVersion};
 
 use crate::{
-	attribute::{BootstrapMethod, LIRClassAttribute, LIRFieldAttribute, LIRMethodAttribute},
+	attribute::{LIRClassAttribute, LIRFieldAttribute, LIRMethodAttribute},
 	field::LIRField,
 	method::LIRMethod,
 };
@@ -20,38 +20,21 @@ pub struct LIRClass {
 }
 
 impl LIRClass {
-	pub fn parse(raw: ClassFile) -> Self {
+	pub fn parse(raw: ClassFile) -> Result<Self> {
 		let version = raw.version;
 		let cp = raw.cp;
 		let access_flags = raw.access_flags;
-		let this_class = match cp.get(raw.this_class as usize - 1).unwrap() {
-			CPTag::Class { name_index } => get_utf8_cp_entry(cp.as_slice(), *name_index).unwrap(),
-			_ => panic!("this_class cp idx did not point to a class entry"),
-		};
-		let super_class = if raw.super_class == 0 {
-			None
+		let this_class = cp.resolve_class_name(cp.get_class(raw.this_class)?)?;
+		let super_class = if raw.super_class != 0 {
+			Some(cp.resolve_class_name(cp.get_class(raw.super_class)?)?)
 		} else {
-			let CPTag::Class { name_index } = cp
-				.get(raw.super_class as usize - 1)
-				.expect("invalid super_class cp idx")
-			else {
-				panic!("super_class cp idx pointed to a non-class entry")
-			};
-			Some(get_utf8_cp_entry(cp.as_slice(), *name_index).unwrap())
+			None
 		};
 		let interfaces = raw
 			.interfaces
 			.iter()
-			.map(|idx| {
-				let t = cp.get(*idx as usize - 1).expect("invalid interface cp idx");
-				match t {
-					CPTag::Class { name_index } => {
-						get_utf8_cp_entry(cp.as_slice(), *name_index).expect("invalid interface name cp idx")
-					}
-					_ => panic!("interface cp idx pointed to a non-class entry"),
-				}
-			})
-			.collect::<Vec<String>>();
+			.map(|idx| -> Result<String> { Ok(cp.resolve_class_name(cp.get_class(*idx)?)?) })
+			.collect::<Result<Vec<String>>>()?;
 
 		let attributes = raw
 			.attributes
@@ -64,27 +47,24 @@ impl LIRClass {
 		let fields = raw
 			.fields
 			.into_iter()
-			.map(|fi| {
+			.map(|fi| -> Result<LIRField> {
 				let access_flags = fi.access_flags;
-				let name = get_utf8_cp_entry(cp.as_slice(), fi.name_index).unwrap();
-				let descriptor = get_utf8_cp_entry(cp.as_slice(), fi.descriptor_index)
-					.unwrap()
-					.parse()
-					.expect("invalid descriptor string");
+				let name = cp.get_utf8(fi.name_index)?;
+				let descriptor = cp.get_utf8(fi.descriptor_index)?.parse()?;
 				let attributes = fi
 					.attributes
 					.into_iter()
 					.map(|attr| LIRFieldAttribute::parse(attr, &cp))
 					.collect::<Result<Vec<_>>>()
 					.unwrap();
-				LIRField {
+				Ok(LIRField {
 					access_flags,
 					name,
 					descriptor,
 					attributes,
-				}
+				})
 			})
-			.collect::<Vec<LIRField>>();
+			.collect::<Result<Vec<LIRField>>>()?;
 		dbg!(&fields);
 
 		let methods = raw
@@ -92,13 +72,8 @@ impl LIRClass {
 			.into_iter()
 			.map(|mi| {
 				let access_flags = mi.access_flags;
-				dbg!(&access_flags);
-				let name = get_utf8_cp_entry(cp.as_slice(), mi.name_index).unwrap();
-				dbg!(&name);
-				let descriptor = get_utf8_cp_entry(cp.as_slice(), mi.descriptor_index)
-					.unwrap()
-					.parse()
-					.expect("invalid descriptor string");
+				let name = cp.get_utf8(mi.name_index)?;
+				let descriptor = cp.get_utf8(mi.descriptor_index)?.parse()?;
 				dbg!(&descriptor);
 				let attributes = mi
 					.attributes
@@ -106,14 +81,14 @@ impl LIRClass {
 					.map(|attr| LIRMethodAttribute::parse(attr, &cp))
 					.collect::<Result<Vec<_>>>()
 					.unwrap();
-				LIRMethod {
+				Ok(LIRMethod {
 					access_flags,
 					name,
 					descriptor,
 					attributes,
-				}
+				})
 			})
-			.collect::<Vec<LIRMethod>>();
+			.collect::<Result<Vec<LIRMethod>>>()?;
 		dbg!(&methods);
 
 		// FIXME: visit all attributes to validate
@@ -123,7 +98,7 @@ impl LIRClass {
 			}
 		}
 
-		LIRClass {
+		Ok(LIRClass {
 			version,
 			access_flags,
 			this_class,
@@ -132,56 +107,7 @@ impl LIRClass {
 			fields,
 			methods,
 			attributes,
-		}
-	}
-}
-
-pub fn get_utf8_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
-	let tag = cp
-		.get(idx as usize - 1)
-		.ok_or_else(|| eyre!("invalid cp idx {}", idx))?;
-	let CPTag::Utf8 { bytes } = tag else {
-		bail!("expected cp idx {} to point to utf8 tag", idx)
-	};
-	let s = paw_mutf8::decode(bytes)?;
-	Ok(s.into_owned())
-}
-
-pub fn get_optional_utf8_cp_entry(cp: &[CPTag], idx: u16) -> Result<Option<String>> {
-	if idx == 0 {
-		Ok(None)
-	} else {
-		Ok(Some(get_utf8_cp_entry(cp, idx)?))
-	}
-}
-
-pub fn get_class_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
-	let tag = cp
-		.get(idx as usize - 1)
-		.ok_or_else(|| eyre!("invalid cp idx {}", idx))?;
-	match tag {
-		CPTag::Class { name_index } => get_utf8_cp_entry(cp, *name_index),
-		_ => bail!("expected cp idx {} to point to class tag", idx),
-	}
-}
-
-pub fn get_module_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
-	let tag = cp
-		.get(idx as usize - 1)
-		.ok_or_else(|| eyre!("invalid cp idx {}", idx))?;
-	match tag {
-		CPTag::Module { name_index } => get_utf8_cp_entry(cp, *name_index),
-		_ => bail!("expected cp idx {} to point to module tag", idx),
-	}
-}
-
-pub fn get_package_name_cp_entry(cp: &[CPTag], idx: u16) -> Result<String> {
-	let tag = cp
-		.get(idx as usize - 1)
-		.ok_or_else(|| eyre!("invalid cp idx {}", idx))?;
-	match tag {
-		CPTag::Package { name_index } => get_utf8_cp_entry(cp, *name_index),
-		_ => bail!("expected cp idx {} to point to package tag", idx),
+		})
 	}
 }
 

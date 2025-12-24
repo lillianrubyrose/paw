@@ -190,6 +190,7 @@ dependencies = [
  "eyre",
  "num-conv",
  "paste",
+ "paw_mutf8",
  "thiserror",
 ]
 

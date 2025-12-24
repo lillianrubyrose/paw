@@ -92,7 +92,7 @@ impl Iterator for DescriptorReader {
 	}
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum DescriptorParseErr {
 	#[error("unkown start of descriptor character: {0}")]
 	UnknownDescriptorStart(char),

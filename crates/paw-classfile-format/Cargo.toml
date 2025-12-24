@@ -7,7 +7,7 @@ edition.workspace = true
 byteorder.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
-
+paw_mutf8 = { path = "../paw-mutf8" }
 num-conv = "0.2.0"
 eyre = "0.6.12"
 color-eyre = "0.6.5"

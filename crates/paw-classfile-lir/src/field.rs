@@ -1,6 +1,6 @@
-use paw_classfile_format::FieldAccessFlags;
+use paw_classfile_format::{FieldAccessFlags, descriptor::Descriptor};
 
-use crate::{attribute::LIRFieldAttribute, descriptor::Descriptor};
+use crate::attribute::LIRFieldAttribute;
 
 #[derive(Debug, Clone)]
 pub struct LIRField {

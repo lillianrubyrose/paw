@@ -2,21 +2,16 @@ use std::io::Cursor;
 
 use bytemuck::AnyBitPattern;
 use byteorder::BigEndian;
-use eyre::{Context, OptionExt, Result, bail, eyre};
+use eyre::{Context, Result, bail};
 use paw_classfile_format::{
 	AttributeInfo, CPTag, InnerClassAccessFlags, ModuleAccessFlags, ModuleExportAccessFlags, ModuleOpenAccessFlags,
-	ModuleRequireAccessFlags, ParameterAccessFlags, ext::ReadBytesExt,
+	ModuleRequireAccessFlags, ParameterAccessFlags,
+	class_pool::{self, ConstantPool},
+	descriptor::{Descriptor, MethodDescriptor},
+	ext::ReadBytesExt,
 };
 
-use crate::{
-	class::{
-		get_class_name_cp_entry, get_module_name_cp_entry, get_optional_utf8_cp_entry, get_package_name_cp_entry,
-		get_utf8_cp_entry,
-	},
-	descriptor::{Descriptor, DescriptorReader, MethodDescriptor},
-	instruction::Instruction,
-	method::LIRMethodHandle,
-};
+use crate::{instruction::Instruction, method::LIRMethodHandle};
 
 #[derive(Debug, Clone)]
 pub enum LIRClassAttribute {
@@ -43,11 +38,8 @@ pub enum LIRClassAttribute {
 }
 
 impl LIRClassAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
-		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
-			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
-			_ => unreachable!(),
-		};
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
@@ -113,11 +105,8 @@ pub enum LIRFieldAttribute {
 }
 
 impl LIRFieldAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
-		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
-			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
-			_ => unreachable!(),
-		};
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
@@ -168,11 +157,8 @@ pub enum LIRMethodAttribute {
 }
 
 impl LIRMethodAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
-		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
-			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
-			_ => unreachable!(),
-		};
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
@@ -225,11 +211,8 @@ pub enum LIRCodeAttribute {
 }
 
 impl LIRCodeAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
-		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
-			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
-			_ => unreachable!(),
-		};
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
@@ -273,11 +256,8 @@ pub enum LIRRecordComponentAttribute {
 }
 
 impl LIRRecordComponentAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
-		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
-			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
-			_ => unreachable!(),
-		};
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
@@ -319,19 +299,17 @@ pub enum ConstantValueAttribute {
 }
 
 impl ConstantValueAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let index = buffer
 			.read_u16::<BigEndian>()
 			.wrap_err("failed to read tag index from ConstantValue attribute")?;
-		let Some(tag) = cp.get(index as usize - 1) else {
-			bail!("cp idx {} in ConstantValue attribute was out of range", index)
-		};
+		let tag = cp.get_tag(index).wrap_err("invalid ConstantAttribute tag index")?;
 		let value = match tag {
 			CPTag::Integer(i) => ConstantValueAttribute::Int(i.cast_signed()),
 			CPTag::Float(f) => ConstantValueAttribute::Float(*f),
 			CPTag::Long(l) => ConstantValueAttribute::Long(l.cast_signed()),
 			CPTag::Double(d) => ConstantValueAttribute::Double(*d),
-			CPTag::String { utf8_index } => ConstantValueAttribute::String(get_utf8_cp_entry(cp, *utf8_index)?),
+			CPTag::String(string_tag) => ConstantValueAttribute::String(cp.resolve_string(string_tag)?),
 			_ => bail!("invalid ConstantValue attribute tag {:?}", tag),
 		};
 		Ok(value)
@@ -356,7 +334,7 @@ pub struct CodeAttribute {
 }
 
 impl CodeAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let max_stack = buffer
 			.read_u16::<BigEndian>()
 			.wrap_err("failed to read max_stack from Code attribute")?;
@@ -462,7 +440,7 @@ impl StackMapFrame {
 		}
 	}
 
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let frame_type = buffer.read_u8()?;
 		let frame = match frame_type {
 			0..=63 => Self::SameFrame { frame_type },
@@ -525,7 +503,7 @@ pub struct StackMapTableAttribute {
 }
 
 impl StackMapTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let entries_count = usize::from(
 			buffer
 				.read_u16::<BigEndian>()
@@ -542,24 +520,17 @@ pub struct ExceptionsAttribute {
 }
 
 impl ExceptionsAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let num_exceptions = usize::from(
 			buffer
 				.read_u16::<BigEndian>()
 				.wrap_err("failed to read number_of_exceptions from Exceptions attribute")?,
 		);
 		let exception_classes = buffer.read_vec_with(num_exceptions, |b| {
-			let index = usize::from(
-				b.read_u16::<BigEndian>()
-					.wrap_err("failed to read exception_index from Exceptions attribute")?,
-			);
-			let tag = cp
-				.get(index - 1)
-				.ok_or_else(|| eyre!("cp idx {} in Exceptions attribute was out of range", index))?;
-			let CPTag::Class { name_index } = tag else {
-				bail!("invalid Exceptions attribute table tag {:?}", tag);
-			};
-			get_utf8_cp_entry(cp, *name_index)
+			let index = b
+				.read_u16::<BigEndian>()
+				.wrap_err("failed to read exception_index from Exceptions attribute")?;
+			Ok(cp.resolve_class_name(cp.get_class(index)?)?)
 		})?;
 		Ok(Self { exception_classes })
 	}
@@ -574,43 +545,28 @@ pub struct InnerClassesAttributeClass {
 }
 
 impl InnerClassesAttributeClass {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let inner_info_idx = buffer.read_u16::<BigEndian>()?;
 		let outer_info_idx = buffer.read_u16::<BigEndian>()?;
 		let inner_name_idx = buffer.read_u16::<BigEndian>()?;
 		let inner_class_access_flags = InnerClassAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 
-		let CPTag::Class {
-			name_index: inner_info_name_idx,
-		} = cp.get(inner_info_idx as usize - 1)
-			.ok_or_eyre("inner class inner_info_idx invalid")?
-		else {
-			bail!("inner class inner_info_idx doesn't point to a class tag");
-		};
-		let inner_class_info = get_utf8_cp_entry(cp, *inner_info_name_idx)?;
-
-		let outer_info_tag = if outer_info_idx == 0 {
-			None
+		let inner_class_info = cp.resolve_class_name(cp.get_class(inner_info_idx)?)?;
+		let outer_class_info = if outer_info_idx != 0 {
+			Some(cp.resolve_class_name(cp.get_class(outer_info_idx)?)?)
 		} else {
-			let tag = cp
-				.get(outer_info_idx as usize - 1)
-				.ok_or_eyre("inner class outer_info_idx invalid")?;
-			match tag {
-				CPTag::Class { name_index } => Some(get_utf8_cp_entry(cp, *name_index)?),
-				_ => bail!("inner class outer_info_idx doesn't point to a class tag"),
-			}
-		};
-
-		let inner_name_tag = if inner_name_idx == 0 {
 			None
+		};
+		let inner_name = if inner_name_idx != 0 {
+			Some(cp.get_utf8(inner_name_idx)?)
 		} else {
-			Some(get_utf8_cp_entry(cp, inner_name_idx)?)
+			None
 		};
 
 		Ok(Self {
 			inner_class_info,
-			outer_class_info: outer_info_tag,
-			inner_name: inner_name_tag,
+			outer_class_info,
+			inner_name,
 			inner_class_access_flags,
 		})
 	}
@@ -622,7 +578,7 @@ pub struct InnerClassesAttribute {
 }
 
 impl InnerClassesAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_classes = usize::from(
 			buffer
 				.read_u16::<BigEndian>()
@@ -641,40 +597,20 @@ pub struct EnclosingMethodAttribute {
 }
 
 impl EnclosingMethodAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		let class_idx = usize::from(
-			buffer
-				.read_u16::<BigEndian>()
-				.wrap_err("failed to read class_index from EnclosingMethod attribute")?,
-		);
-		let method_idx = usize::from(
-			buffer
-				.read_u16::<BigEndian>()
-				.wrap_err("failed to read method_index from EnclosingMethod attribute")?,
-		);
-		let tag = cp
-			.get(class_idx - 1)
-			.ok_or_else(|| eyre!("class_idx {} in EnclosingMethod attribute was out of range", class_idx))?;
-		let CPTag::Class { name_index } = tag else {
-			bail!("invalid EnclosingMethod attribute class tag {:?}", tag);
-		};
-		let class = get_utf8_cp_entry(cp, *name_index)?;
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+		let class_idx = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read class_index from EnclosingMethod attribute")?;
+		let method_idx = buffer
+			.read_u16::<BigEndian>()
+			.wrap_err("failed to read method_index from EnclosingMethod attribute")?;
 
-		let tag = cp.get(method_idx - 1).ok_or_else(|| {
-			eyre!(
-				"method_idx {} in EnclosingMethod attribute was out of range",
-				method_idx
-			)
-		})?;
-		let CPTag::NameAndType {
-			name_index,
-			descriptor_index,
-		} = tag
-		else {
-			bail!("invalid EnclosingMethod attribute method tag {:?}", tag);
-		};
-		let method_name = get_utf8_cp_entry(cp, *name_index)?;
-		let method_descriptor = get_utf8_cp_entry(cp, *descriptor_index)?.parse()?;
+		let class = cp.resolve_class_name(cp.get_class(class_idx)?)?;
+
+		let method_name_and_ty = cp.get_name_and_type(method_idx)?;
+		let method_name = cp.get_utf8(method_name_and_ty.name_index)?;
+		let method_descriptor = cp.get_utf8(method_name_and_ty.descriptor_index)?.parse()?;
+
 		Ok(EnclosingMethodAttribute {
 			class,
 			method_name,
@@ -690,11 +626,11 @@ pub struct SignatureAttribute {
 }
 
 impl SignatureAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let signature_index = buffer
 			.read_u16::<BigEndian>()
 			.wrap_err("failed to read signature_index from Signature attribute")?;
-		let signature = get_utf8_cp_entry(cp, signature_index)?;
+		let signature = cp.get_utf8(signature_index)?;
 		Ok(Self { signature })
 	}
 }
@@ -705,11 +641,11 @@ pub struct SourceFileAttribute {
 }
 
 impl SourceFileAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let sourcefile_index = buffer
 			.read_u16::<BigEndian>()
 			.wrap_err("failed to read sourcefile_index from SourceFile attribute")?;
-		let source_file = get_utf8_cp_entry(cp, sourcefile_index)?;
+		let source_file = cp.get_utf8(sourcefile_index)?;
 		Ok(Self { source_file })
 	}
 }
@@ -770,13 +706,13 @@ pub struct LocalVariableTableEntry {
 }
 
 impl LocalVariableTableEntry {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let start_pc = buffer.read_u16::<BigEndian>()?;
 		let len = buffer.read_u16::<BigEndian>()?;
 		let name_idx = buffer.read_u16::<BigEndian>()?;
-		let name = get_utf8_cp_entry(cp, name_idx)?;
+		let name = cp.get_utf8(name_idx)?;
 		let descriptor_idx = buffer.read_u16::<BigEndian>()?;
-		let descriptor = get_utf8_cp_entry(cp, descriptor_idx)?.parse()?;
+		let descriptor = cp.get_utf8(descriptor_idx)?.parse()?;
 		let local_idx = buffer.read_u16::<BigEndian>()?;
 		Ok(LocalVariableTableEntry {
 			start_pc,
@@ -794,7 +730,7 @@ pub struct LocalVariableTableAttribute {
 }
 
 impl LocalVariableTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let num_entries = usize::from(
 			buffer
 				.read_u16::<BigEndian>()
@@ -816,13 +752,13 @@ pub struct LocalVariableTypeTableEntry {
 }
 
 impl LocalVariableTypeTableEntry {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let start_pc = buffer.read_u16::<BigEndian>()?;
 		let len = buffer.read_u16::<BigEndian>()?;
 		let name_idx = buffer.read_u16::<BigEndian>()?;
-		let name = get_utf8_cp_entry(cp, name_idx)?;
+		let name = cp.get_utf8(name_idx)?;
 		let signature_idx = buffer.read_u16::<BigEndian>()?;
-		let signature = get_utf8_cp_entry(cp, signature_idx)?;
+		let signature = cp.get_utf8(signature_idx)?;
 		let local_idx = buffer.read_u16::<BigEndian>()?;
 		Ok(LocalVariableTypeTableEntry {
 			start_pc,
@@ -840,7 +776,7 @@ pub struct LocalVariableTypeTableAttribute {
 }
 
 impl LocalVariableTypeTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let num_entries = usize::from(buffer.read_u16::<BigEndian>()?);
 		let table = buffer.read_vec_with(num_entries, |reader| LocalVariableTypeTableEntry::read(reader, cp))?;
 		Ok(Self { table })
@@ -864,30 +800,30 @@ pub enum RuntimeAnnotationValue {
 pub type AnnotationDefaultAttribute = RuntimeAnnotationValue;
 
 impl RuntimeAnnotationValue {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let tag = buffer.read_u8()?;
 		Ok(match tag {
 			b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z' | b's' => {
 				let index = buffer.read_u16::<BigEndian>()?;
 				let tag = cp
-					.get(index as usize - 1)
-					.ok_or_eyre("runtime annotation value constant value tag index is invalid")?;
+					.get_tag(index)
+					.wrap_err("runtime annotation value constant value tag index is invalid")?;
 				Self::ConstValueIndex(match tag {
 					CPTag::Integer(i) => ConstantValueAttribute::Int(i.cast_signed()),
 					CPTag::Float(f) => ConstantValueAttribute::Float(*f),
 					CPTag::Long(l) => ConstantValueAttribute::Long(l.cast_signed()),
 					CPTag::Double(d) => ConstantValueAttribute::Double(*d),
-					CPTag::Utf8 { bytes } => ConstantValueAttribute::String(paw_mutf8::decode(&bytes)?.into_owned()),
-					tag => panic!("invalid RuntimeAnnotationValue attribute tag {tag:?}"),
+					CPTag::Utf8(class_pool::Utf8Tag { value }) => ConstantValueAttribute::String(value.clone()),
+					tag => bail!("invalid RuntimeAnnotationValue attribute tag {:?}", tag),
 				})
 			}
 
 			b'e' => Self::EnumConstValue {
-				type_name: get_utf8_cp_entry(cp, buffer.read_u16::<BigEndian>()?)?,
-				const_name: get_utf8_cp_entry(cp, buffer.read_u16::<BigEndian>()?)?,
+				type_name: cp.get_utf8(buffer.read_u16::<BigEndian>()?)?,
+				const_name: cp.get_utf8(buffer.read_u16::<BigEndian>()?)?,
 			},
 
-			b'c' => Self::ClassInfoIndex(get_utf8_cp_entry(cp, buffer.read_u16::<BigEndian>()?)?),
+			b'c' => Self::ClassInfoIndex(cp.get_utf8(buffer.read_u16::<BigEndian>()?)?),
 			b'@' => Self::Annotation(Box::new(RuntimeAnnotation::parse(buffer, cp)?)),
 			b'[' => {
 				let n_values = buffer.read_u16::<BigEndian>()? as usize;
@@ -917,28 +853,21 @@ pub struct RuntimeAnnotation {
 }
 
 impl RuntimeAnnotation {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		let ty_idx = buffer.read_u16::<BigEndian>()?;
-		let ty = get_utf8_cp_entry(cp, ty_idx)?;
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+		let ty = cp.get_utf8(buffer.read_u16::<BigEndian>()?)?.parse()?;
 
 		let n_pairs = buffer.read_u16::<BigEndian>()? as usize;
 		let mut pairs = Vec::with_capacity(n_pairs);
 
 		for _ in 0..n_pairs {
-			let name_idx = buffer.read_u16::<BigEndian>()?;
-			let name = get_utf8_cp_entry(cp, name_idx)?;
-
+			let name = cp.get_utf8(buffer.read_u16::<BigEndian>()?)?;
 			pairs.push(RuntimeAnnotationElementValuePair {
 				name,
 				value: RuntimeAnnotationValue::parse(buffer, cp)?,
 			});
 		}
 
-		let mut ty = DescriptorReader::new(ty);
-		Ok(Self {
-			ty: ty.next().ok_or_eyre("runtime annotation invalid type descriptor")??,
-			pairs,
-		})
+		Ok(Self { ty, pairs })
 	}
 }
 
@@ -948,7 +877,7 @@ pub struct RuntimeAnnotationsAttribute {
 }
 
 impl RuntimeAnnotationsAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_annotations = buffer.read_u16::<BigEndian>()? as usize;
 		let annotations = buffer.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))?;
 		Ok(Self { annotations })
@@ -966,7 +895,7 @@ pub struct RuntimeParameterAnnotationsAttribute {
 }
 
 impl RuntimeParameterAnnotationsAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_params = usize::from(buffer.read_u8()?);
 		let param_annotations = buffer.read_vec_with(n_params, |b| {
 			let n_annotations = usize::from(b.read_u16::<BigEndian>()?);
@@ -987,34 +916,28 @@ pub struct RuntimeTypeAnnotation {
 }
 
 impl RuntimeTypeAnnotation {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let target_type = buffer.read_u8()?;
 		let target_info = RuntimeTypeAnnotationTargetInfo::parse(target_type, buffer)?;
 		let target_path = parse_type_path(buffer)?;
 
-		let type_index = buffer.read_u16::<BigEndian>()?;
-		let type_name = get_utf8_cp_entry(cp, type_index)?;
+		let ty = cp.get_utf8(buffer.read_u16::<BigEndian>()?)?.parse()?;
 
 		let n_pairs = buffer.read_u16::<BigEndian>()? as usize;
 		let mut pairs = Vec::with_capacity(n_pairs);
 
 		for _ in 0..n_pairs {
-			let name_idx = buffer.read_u16::<BigEndian>()?;
-			let name = get_utf8_cp_entry(cp, name_idx)?;
-
+			let name = cp.get_utf8(buffer.read_u16::<BigEndian>()?)?;
 			pairs.push(RuntimeAnnotationElementValuePair {
 				name,
 				value: RuntimeAnnotationValue::parse(buffer, cp)?,
 			});
 		}
 
-		let mut type_name = DescriptorReader::new(type_name);
 		Ok(Self {
 			target_info,
 			target_path,
-			ty: type_name
-				.next()
-				.ok_or_eyre("invalid runtimetypeannotation type name")??,
+			ty,
 			pairs,
 		})
 	}
@@ -1026,7 +949,7 @@ pub struct RuntimeTypeAnnotationsAttribute {
 }
 
 impl RuntimeTypeAnnotationsAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_annotations = buffer.read_u16::<BigEndian>()? as usize;
 		let annotations = buffer.read_vec_with(n_annotations, |b| RuntimeTypeAnnotation::parse(b, cp))?;
 		Ok(Self { annotations })
@@ -1040,7 +963,7 @@ pub struct BootstrapMethod {
 }
 
 impl BootstrapMethod {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let method_idx = buffer.read_u16::<BigEndian>()?;
 		let n_args = buffer.read_u16::<BigEndian>()? as usize;
 		let argument_idxs = buffer.read_vec_with(n_args, |b| Ok(b.read_u16::<BigEndian>()?))?;
@@ -1049,11 +972,7 @@ impl BootstrapMethod {
 			method: LIRMethodHandle::resolve(cp, method_idx)?,
 			arguments: argument_idxs
 				.into_iter()
-				.map(|idx| {
-					cp.get(idx as usize - 1)
-						.cloned()
-						.ok_or_eyre("bootstrap method method reference idx invalid")
-				})
+				.map(|idx| Ok(cp.get_tag(idx).cloned()?))
 				.collect::<Result<Vec<_>>>()?,
 		})
 	}
@@ -1065,7 +984,7 @@ pub struct BootstrapMethodsAttribute {
 }
 
 impl BootstrapMethodsAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_methods = usize::from(buffer.read_u16::<BigEndian>()?);
 		let methods = buffer.read_vec_with(n_methods, |b| BootstrapMethod::parse(b, cp))?;
 		Ok(Self { methods })
@@ -1085,13 +1004,13 @@ pub struct MethodParametersAttribute {
 }
 
 impl MethodParametersAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let param_count = usize::from(buffer.read_u8()?);
 		let parameters = buffer.read_vec_with(param_count, |b| {
 			let name_idx = b.read_u16::<BigEndian>()?;
 			let access = ParameterAccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
 			let name = if name_idx != 0 {
-				Some(get_utf8_cp_entry(cp, name_idx)?)
+				Some(cp.get_utf8(name_idx)?)
 			} else {
 				None
 			};
@@ -1141,38 +1060,49 @@ pub struct ModuleAttribute {
 }
 
 impl ModuleAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		let name_index = buffer.read_u16::<BigEndian>()?;
-		let name = get_module_name_cp_entry(cp, name_index)?;
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+		let index = buffer.read_u16::<BigEndian>()?;
+		let name = cp.resolve_module_name(cp.get_module(index)?)?;
 
 		let flags = ModuleAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
 
 		let version_index = buffer.read_u16::<BigEndian>()?;
-		let version = get_optional_utf8_cp_entry(cp, version_index)?;
+		let version = if version_index == 0 {
+			None
+		} else {
+			Some(cp.get_utf8(version_index)?)
+		};
 
 		let requires_count = buffer.read_u16::<BigEndian>()?;
 		let requires = buffer.read_vec_with(requires_count as usize, |b| {
 			let requires_index = b.read_u16::<BigEndian>()?;
+			let requires_module = cp.get_module(requires_index)?;
 			let requires_flags = ModuleRequireAccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
 			let requires_version_index = b.read_u16::<BigEndian>()?;
 			Ok(ModuleRequire {
-				module: get_module_name_cp_entry(cp, requires_index)?,
+				module: cp.resolve_module_name(requires_module)?,
 				flags: requires_flags,
-				version: get_optional_utf8_cp_entry(cp, requires_version_index)?,
+				version: if requires_version_index == 0 {
+					None
+				} else {
+					Some(cp.get_utf8(requires_version_index)?)
+				},
 			})
 		})?;
 
 		let exports_count = buffer.read_u16::<BigEndian>()?;
 		let exports = buffer.read_vec_with(exports_count as usize, |b| {
 			let exports_index = b.read_u16::<BigEndian>()?;
+			let exports_package = cp.get_package(exports_index)?;
 			let exports_flags = ModuleExportAccessFlags::try_from(b.read_u16::<BigEndian>()?)?;
 			let exports_to_count = b.read_u16::<BigEndian>()?;
 			let exports_to = b.read_vec_with(exports_to_count as usize, |b2| {
 				let exports_to_index = b2.read_u16::<BigEndian>()?;
-				get_module_name_cp_entry(cp, exports_to_index)
+				let exports_to_module = cp.get_module(exports_to_index)?;
+				Ok(cp.resolve_module_name(exports_to_module)?)
 			})?;
 			Ok(ModuleExport {
-				package: get_package_name_cp_entry(cp, exports_index)?,
+				package: cp.resolve_package_name(exports_package)?,
 				flags: exports_flags,
 				exports_to,
 			})
@@ -1185,10 +1115,13 @@ impl ModuleAttribute {
 			let opens_to_count = b.read_u16::<BigEndian>()?;
 			let opens_to = b.read_vec_with(opens_to_count as usize, |b2| {
 				let opens_to_index = b2.read_u16::<BigEndian>()?;
-				get_module_name_cp_entry(cp, opens_to_index)
+				let opens_to_module = cp.get_module(opens_to_index)?;
+				Ok(cp.resolve_module_name(opens_to_module)?)
 			})?;
+
+			let opens_package = cp.get_package(opens_index)?;
 			Ok(ModuleOpen {
-				package: get_package_name_cp_entry(cp, opens_index)?,
+				package: cp.resolve_package_name(opens_package)?,
 				flags: opens_flags,
 				opens_to,
 			})
@@ -1197,19 +1130,22 @@ impl ModuleAttribute {
 		let uses_count = buffer.read_u16::<BigEndian>()?;
 		let uses = buffer.read_vec_with(uses_count as usize, |b| {
 			let uses_index = b.read_u16::<BigEndian>()?;
-			get_class_name_cp_entry(cp, uses_index)
+			let uses_class = cp.get_class(uses_index)?;
+			Ok(cp.resolve_class_name(uses_class)?)
 		})?;
 
 		let provides_count = buffer.read_u16::<BigEndian>()?;
 		let provides = buffer.read_vec_with(provides_count as usize, |b| {
 			let provides_index = b.read_u16::<BigEndian>()?;
+			let provides_class = cp.get_class(provides_index)?;
 			let provides_with_count = b.read_u16::<BigEndian>()?;
 			let providers = b.read_vec_with(provides_with_count as usize, |b2| {
 				let provides_with_index = b2.read_u16::<BigEndian>()?;
-				get_class_name_cp_entry(cp, provides_with_index)
+				let provides_with_class = cp.get_class(provides_with_index)?;
+				Ok(cp.resolve_class_name(provides_with_class)?)
 			})?;
 			Ok(ModuleProvide {
-				service: get_class_name_cp_entry(cp, provides_index)?,
+				service: cp.resolve_class_name(provides_class)?,
 				providers,
 			})
 		})?;
@@ -1233,11 +1169,12 @@ pub struct ModulePackagesAttribute {
 }
 
 impl ModulePackagesAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let package_count = buffer.read_u16::<BigEndian>()?;
 		let packages = buffer.read_vec_with(package_count as usize, |b| {
 			let package_index = b.read_u16::<BigEndian>()?;
-			get_package_name_cp_entry(cp, package_index)
+			let package = cp.get_package(package_index)?;
+			Ok(cp.resolve_package_name(package)?)
 		})?;
 		Ok(Self { packages })
 	}
@@ -1249,10 +1186,9 @@ pub struct ModuleMainClassAttribute {
 }
 
 impl ModuleMainClassAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		Ok(Self {
-			main_class: get_class_name_cp_entry(cp, buffer.read_u16::<BigEndian>()?)?,
-		})
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+		let main_class = cp.resolve_class_name(cp.get_class(buffer.read_u16::<BigEndian>()?)?)?;
+		Ok(Self { main_class })
 	}
 }
 
@@ -1262,12 +1198,8 @@ pub struct NestHostAttribute {
 }
 
 impl NestHostAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
-		let idx = buffer.read_u16::<BigEndian>()?;
-		let CPTag::Class { name_index } = cp.get(idx as usize - 1).ok_or_eyre("invalid nesthost idx")? else {
-			bail!("NestHost idx is not a classref");
-		};
-		let host_class = get_utf8_cp_entry(cp, *name_index)?;
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+		let host_class = cp.resolve_class_name(cp.get_class(buffer.read_u16::<BigEndian>()?)?)?;
 		Ok(Self { host_class })
 	}
 }
@@ -1278,14 +1210,10 @@ pub struct NestMembersAttribute {
 }
 
 impl NestMembersAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_classes = usize::from(buffer.read_u16::<BigEndian>()?);
 		let member_classes = buffer.read_vec_with(n_classes, |b| {
-			let index = b.read_u16::<BigEndian>()?;
-			let CPTag::Class { name_index } = cp.get(index as usize - 1).ok_or_eyre("invalid nestmembers idx")? else {
-				bail!("A NestMembers name_index idx is not a classref");
-			};
-			get_utf8_cp_entry(cp, *name_index)
+			Ok(cp.resolve_class_name(cp.get_class(b.read_u16::<BigEndian>()?)?)?)
 		})?;
 		Ok(Self { member_classes })
 	}
@@ -1299,13 +1227,13 @@ pub struct RecordComponent {
 }
 
 impl RecordComponent {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let name_idx = buffer.read_u16::<BigEndian>()?;
 		let descriptor_idx = buffer.read_u16::<BigEndian>()?;
 		let attr_count = usize::from(buffer.read_u16::<BigEndian>()?);
 
-		let name = get_utf8_cp_entry(cp, name_idx)?;
-		let descriptor = get_utf8_cp_entry(cp, descriptor_idx)?.parse()?;
+		let name = cp.get_utf8(name_idx)?;
+		let descriptor = cp.get_utf8(descriptor_idx)?.parse()?;
 		let attributes = buffer.read_vec_with(attr_count, |b| {
 			let attr_raw = AttributeInfo::read(b)?;
 			LIRRecordComponentAttribute::parse(attr_raw, cp)
@@ -1324,7 +1252,7 @@ pub struct RecordAttribute {
 }
 
 impl RecordAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_components = usize::from(buffer.read_u16::<BigEndian>()?);
 		let components = buffer.read_vec_with(n_components, |b| RecordComponent::parse(b, cp))?;
 		Ok(Self { components })
@@ -1337,17 +1265,12 @@ pub struct PermittedSubclassesAttribute {
 }
 
 impl PermittedSubclassesAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let n_classes = buffer.read_u16::<BigEndian>()? as usize;
 		let subclasses = buffer.read_vec_with(n_classes, |b| {
 			let index = b.read_u16::<BigEndian>()?;
-			let CPTag::Class { name_index } = cp
-				.get(index as usize - 1)
-				.ok_or_eyre("invalid permitted subclasses idx")?
-			else {
-				bail!("A PermittedSubclasses name_index idx is not a classref");
-			};
-			get_utf8_cp_entry(cp, *name_index)
+			let class = cp.get_class(index)?;
+			Ok(cp.resolve_class_name(class)?)
 		})?;
 		Ok(Self { subclasses })
 	}
@@ -1368,7 +1291,7 @@ pub enum VerificationTypeInfo {
 }
 
 impl VerificationTypeInfo {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let tag = buffer.read_u8()?;
 		Ok(match tag {
 			0 => Self::TopVariableInfo,
@@ -1379,7 +1302,7 @@ impl VerificationTypeInfo {
 			5 => Self::NullVariableInfo,
 			6 => Self::UninitializedThisVariableInfo,
 			7 => Self::ObjectVariableInfo {
-				class_name: get_class_name_cp_entry(cp, buffer.read_u16::<BigEndian>()?)?,
+				class_name: cp.resolve_class_name(cp.get_class(buffer.read_u16::<BigEndian>()?)?)?,
 			},
 			8 => Self::UninitializedVariableInfo {
 				offset: buffer.read_u16::<BigEndian>()?,

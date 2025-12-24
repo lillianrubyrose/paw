@@ -1,12 +1,12 @@
-use eyre::{OptionExt, bail};
-use paw_classfile_format::{CPTag, MethodAccessFlags};
-use thiserror::Error;
-
-use crate::{
-	attribute::LIRMethodAttribute,
-	class::{get_class_name_cp_entry, get_utf8_cp_entry},
+use eyre::bail;
+use paw_classfile_format::{
+	CPTag, MethodAccessFlags,
+	class_pool::{ConstantPool, FieldRefTag, InterfaceMethodRefTag, MethodHandleTag, MethodRefTag},
 	descriptor::MethodDescriptor,
 };
+use thiserror::Error;
+
+use crate::attribute::LIRMethodAttribute;
 
 // https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-5.html#jvms-5.4.3.5
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -58,55 +58,40 @@ pub struct LIRMethodHandle {
 	pub kind: LIRMethodHandleKind,
 	pub owner: String,
 	pub name: String,
-	pub descriptor: String,
+	pub descriptor: MethodDescriptor,
 	pub is_interface: bool,
 }
 
 impl LIRMethodHandle {
-	pub fn resolve(cp: &[CPTag], index: u16) -> eyre::Result<Self> {
-		let tag = cp.get(index as usize - 1).ok_or_eyre("method handle idx invalid")?;
-		let (reference_kind, reference_index) = match tag {
-			CPTag::MethodHandle {
-				reference_kind,
-				reference_index,
-			} => (*reference_kind, *reference_index),
-			_ => bail!("LIRMethodHandle expected idx {index} to be CPTag::MethodHandle"),
-		};
+	pub fn resolve(cp: &ConstantPool, index: u16) -> eyre::Result<Self> {
+		let MethodHandleTag {
+			reference_kind,
+			reference_index,
+		} = cp.get_method_handle(index)?;
 
-		let kind = LIRMethodHandleKind::try_from(reference_kind)?;
-		let reference_tag = cp
-			.get(reference_index as usize - 1)
-			.ok_or_eyre("method handle ref idx invalid")?;
+		let kind = LIRMethodHandleKind::try_from(*reference_kind)?;
+		let reference_tag = cp.get_tag(*reference_index)?;
 		let (class_index, name_and_ty_index, is_interface) = match reference_tag {
-			CPTag::FieldRef {
+			CPTag::FieldRef(FieldRefTag {
 				class_index,
 				name_and_ty_index,
-			} => (*class_index, *name_and_ty_index, false),
-			CPTag::MethodRef {
+			}) => (*class_index, *name_and_ty_index, false),
+			CPTag::MethodRef(MethodRefTag {
 				class_index,
 				name_and_ty_index,
-			} => (*class_index, *name_and_ty_index, false),
-			CPTag::InterfaceMethodRef {
+			}) => (*class_index, *name_and_ty_index, false),
+			CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
 				class_index,
 				name_and_ty_index,
-			} => (*class_index, *name_and_ty_index, true),
+			}) => (*class_index, *name_and_ty_index, true),
 			tag => bail!("invalid reference tag for method handle {tag:?}"),
 		};
 
-		let owner = get_class_name_cp_entry(cp, class_index)?;
-		let (name, descriptor) = match cp
-			.get(name_and_ty_index as usize - 1)
-			.ok_or_eyre("method handle name_and_type idx invalid")?
-		{
-			CPTag::NameAndType {
-				name_index,
-				descriptor_index,
-			} => (
-				get_utf8_cp_entry(cp, *name_index)?,
-				get_utf8_cp_entry(cp, *descriptor_index)?,
-			),
-			tag => bail!("expected name and type tag. got: {tag:?}"),
-		};
+		let owner = cp.get_class(class_index)?;
+		let owner = cp.resolve_class_name(owner)?;
+
+		let nat = cp.get_name_and_type(name_and_ty_index)?;
+		let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
 
 		Ok(Self {
 			kind,

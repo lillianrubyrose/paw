@@ -1,15 +1,13 @@
-use std::str::FromStr;
-
 use byteorder::BigEndian;
-use eyre::{OptionExt, Result, bail};
-use paw_classfile_format::{CPTag, ext::ReadBytesExt};
-
-use crate::{
-	attribute::BootstrapMethod,
-	class::{get_class_name_cp_entry, get_utf8_cp_entry},
+use eyre::{Result, bail};
+use paw_classfile_format::{
+	CPTag,
+	class_pool::{ClassTag, ConstantPool, InterfaceMethodRefTag, MethodRefTag, MethodTypeTag, StringTag},
 	descriptor::{Descriptor, MethodDescriptor},
-	method::LIRMethodHandle,
+	ext::ReadBytesExt,
 };
+
+use crate::method::LIRMethodHandle;
 
 pub mod opcodes {
 	pub const ACONST_NULL: u8 = 0x1;
@@ -62,7 +60,7 @@ pub enum LIRLDCConstant {
 	Double(f64),
 	String(String),
 	Class(String),
-	MethodType(String),
+	MethodType(String), // FIXME: Use methoddescriptor here
 	MethodHandle(LIRMethodHandle),
 }
 
@@ -188,7 +186,7 @@ impl Instruction {
 		}
 	}
 
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let opcode = buffer.read_u8()?;
 		Ok(match opcode {
 			opcodes::ACONST_NULL => Instruction::AConstNull,
@@ -200,14 +198,14 @@ impl Instruction {
 				} else {
 					buffer.read_u16::<BigEndian>()?
 				};
-				let tag = cp.get(index as usize - 1).ok_or_eyre("invalid cp index for ldc")?;
+				let tag = cp.get_tag(index)?;
 				let constant = match tag {
 					CPTag::Integer(v) => LIRLDCConstant::Int(*v as i32),
 					CPTag::Float(v) => LIRLDCConstant::Float(*v),
-					CPTag::String { utf8_index } => LIRLDCConstant::String(get_utf8_cp_entry(cp, *utf8_index)?),
-					CPTag::Class { name_index } => LIRLDCConstant::Class(get_utf8_cp_entry(cp, *name_index)?),
-					CPTag::MethodType { descriptor_index } => {
-						LIRLDCConstant::MethodType(get_utf8_cp_entry(cp, *descriptor_index)?)
+					CPTag::String(StringTag { utf8_index }) => LIRLDCConstant::String(cp.get_utf8(*utf8_index)?),
+					CPTag::Class(ClassTag { name_index }) => LIRLDCConstant::Class(cp.get_utf8(*name_index)?),
+					CPTag::MethodType(MethodTypeTag { descriptor_index }) => {
+						LIRLDCConstant::MethodType(cp.get_utf8(*descriptor_index)?)
 					}
 					CPTag::MethodHandle { .. } => LIRLDCConstant::MethodHandle(LIRMethodHandle::resolve(cp, index)?),
 					_ => bail!("invalid tag for ldc: {:?}", tag),
@@ -217,7 +215,7 @@ impl Instruction {
 
 			opcodes::LDC2_W => {
 				let index = buffer.read_u16::<BigEndian>()?;
-				let tag = cp.get(index as usize - 1).ok_or_eyre("invalid cp index for ldc2_w")?;
+				let tag = cp.get_tag(index)?;
 				let constant = match tag {
 					CPTag::Long(v) => LIRLDCConstant::Long(*v as i64),
 					CPTag::Double(v) => LIRLDCConstant::Double(*v),
@@ -257,31 +255,14 @@ impl Instruction {
 
 			opcodes::GET_STATIC | opcodes::PUT_FIELD => {
 				let index = buffer.read_u16::<BigEndian>()?;
-				let tag = cp
-					.get(index as usize - 1)
-					.ok_or_eyre("invalid cp index for getstatic")?;
-				let (class_index, name_and_type_index) = match tag {
-					CPTag::FieldRef {
-						class_index,
-						name_and_ty_index,
-					} => (*class_index, *name_and_ty_index),
-					tag => bail!("Invalid tag for getstatic: {:?}", tag),
-				};
-				let owner = get_class_name_cp_entry(cp, class_index)?;
-				let name_and_type = cp
-					.get(name_and_type_index as usize - 1)
-					.ok_or_eyre("invalid name_and_type index")?;
-				let (name, descriptor) = match name_and_type {
-					CPTag::NameAndType {
-						name_index,
-						descriptor_index,
-					} => (
-						get_utf8_cp_entry(cp, *name_index)?,
-						get_utf8_cp_entry(cp, *descriptor_index)?,
-					),
-					tag => bail!("Invalid tag for name_and_type: {:?}", tag),
-				};
-				let descriptor = Descriptor::from_str(&descriptor)?;
+
+				let field_ref = cp.get_field_ref(index)?;
+				let nat = cp.get_name_and_type(field_ref.name_and_ty_index)?;
+				let (name, descriptor) = cp.resolve_field_name_and_type(nat)?;
+
+				let owner = cp.get_class(field_ref.class_index)?;
+				let owner = cp.resolve_class_name(owner)?;
+
 				match opcode {
 					opcodes::GET_STATIC => Instruction::GetStatic {
 						owner,
@@ -299,32 +280,14 @@ impl Instruction {
 
 			opcodes::INVOKE_VIRTUAL => {
 				let index = buffer.read_u16::<BigEndian>()?;
-				let tag = cp
-					.get(index as usize - 1)
-					.ok_or_eyre("invalid cp index for invokevirtual")?;
-				let (class_index, name_and_type_index) = match tag {
-					CPTag::MethodRef {
-						class_index,
-						name_and_ty_index,
-					} => (*class_index, *name_and_ty_index),
 
-					tag => bail!("Invalid tag for invokevirtual: {:?}", tag),
-				};
-				let owner = get_class_name_cp_entry(cp, class_index)?;
-				let name_and_type = cp
-					.get(name_and_type_index as usize - 1)
-					.ok_or_eyre("invalid name_and_type index")?;
-				let (name, descriptor) = match name_and_type {
-					CPTag::NameAndType {
-						name_index,
-						descriptor_index,
-					} => (
-						get_utf8_cp_entry(cp, *name_index)?,
-						get_utf8_cp_entry(cp, *descriptor_index)?,
-					),
-					tag => bail!("Invalid tag for name_and_type: {:?}", tag),
-				};
-				let descriptor = MethodDescriptor::from_str(&descriptor)?;
+				let method_ref = cp.get_method_ref(index)?;
+				let nat = cp.get_name_and_type(method_ref.name_and_ty_index)?;
+				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
+
+				let owner = cp.get_class(method_ref.class_index)?;
+				let owner = cp.resolve_class_name(owner)?;
+
 				Instruction::InvokeVirtual {
 					owner,
 					name,
@@ -334,35 +297,25 @@ impl Instruction {
 
 			opcodes::INVOKE_SPECIAL | opcodes::INVOKE_STATIC => {
 				let index = buffer.read_u16::<BigEndian>()?;
-				let tag = cp
-					.get(index as usize - 1)
-					.ok_or_eyre("invalid cp index for invokespecial")?;
+
+				let tag = cp.get_tag(index)?;
 				let (class_index, name_and_type_index, is_interface) = match tag {
-					CPTag::MethodRef {
+					CPTag::MethodRef(MethodRefTag {
 						class_index,
 						name_and_ty_index,
-					} => (*class_index, *name_and_ty_index, false),
-					CPTag::InterfaceMethodRef {
+					}) => (*class_index, *name_and_ty_index, false),
+					CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
 						class_index,
 						name_and_ty_index,
-					} => (*class_index, *name_and_ty_index, true),
+					}) => (*class_index, *name_and_ty_index, true),
 					tag => bail!("Invalid tag for invokespecial: {:?}", tag),
 				};
-				let owner = get_class_name_cp_entry(cp, class_index)?;
-				let name_and_type = cp
-					.get(name_and_type_index as usize - 1)
-					.ok_or_eyre("invalid name_and_type index")?;
-				let (name, descriptor) = match name_and_type {
-					CPTag::NameAndType {
-						name_index,
-						descriptor_index,
-					} => (
-						get_utf8_cp_entry(cp, *name_index)?,
-						get_utf8_cp_entry(cp, *descriptor_index)?,
-					),
-					tag => bail!("Invalid tag for name_and_type: {:?}", tag),
-				};
-				let descriptor = MethodDescriptor::from_str(&descriptor)?;
+
+				let owner = cp.get_class(class_index)?;
+				let owner = cp.resolve_class_name(owner)?;
+
+				let nat = cp.get_name_and_type(name_and_type_index)?;
+				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
 
 				match opcode {
 					opcodes::INVOKE_SPECIAL => Instruction::InvokeSpecial {
@@ -382,31 +335,12 @@ impl Instruction {
 			}
 			opcodes::INVOKE_DYNAMIC => {
 				let index = buffer.read_u16::<BigEndian>()?;
-				let tag = cp
-					.get(index as usize - 1)
-					.ok_or_eyre("invalid cp index for invokedynamic")?;
-				let (bootstrap_method_attr_index, name_and_type_index) = match tag {
-					CPTag::InvokeDynamic {
-						bootstrap_method_attr_index,
-						name_and_ty_index,
-					} => (*bootstrap_method_attr_index, *name_and_ty_index),
-					tag => bail!("Invalid tag for method handle: {:?}", tag),
-				};
-				todo!("get bsm from class");
-				let name_and_type = cp
-					.get(name_and_type_index as usize - 1)
-					.ok_or_eyre("invalid name_and_type index")?;
-				let (name, descriptor) = match name_and_type {
-					CPTag::NameAndType {
-						name_index,
-						descriptor_index,
-					} => (
-						get_utf8_cp_entry(cp, *name_index)?,
-						get_utf8_cp_entry(cp, *descriptor_index)?,
-					),
-					tag => bail!("Invalid tag for name_and_type: {:?}", tag),
-				};
-				let descriptor = MethodDescriptor::from_str(&descriptor)?;
+
+				let tag = cp.get_invoke_dynamic(index)?;
+				todo!("get bsm from class attributes");
+
+				let nat = cp.get_name_and_type(tag.name_and_ty_index)?;
+				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
 				todo!()
 			}
 
