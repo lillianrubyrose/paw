@@ -3,7 +3,7 @@ use paw_classfile_format::{CPTag, MethodAccessFlags};
 use thiserror::Error;
 
 use crate::{
-	attribute::LIRAttribute,
+	attribute::LIRMethodAttribute,
 	class::{get_class_name_cp_entry, get_utf8_cp_entry},
 	descriptor::MethodDescriptor,
 };
@@ -123,5 +123,5 @@ pub struct LIRMethod {
 	pub access_flags: MethodAccessFlags,
 	pub name: String,
 	pub descriptor: MethodDescriptor,
-	pub attributes: Vec<LIRAttribute>,
+	pub attributes: Vec<LIRMethodAttribute>,
 }

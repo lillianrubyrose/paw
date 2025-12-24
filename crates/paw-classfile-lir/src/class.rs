@@ -1,8 +1,8 @@
 use eyre::{Result, bail, eyre};
-use paw_classfile_format::{CPTag, ClassAccessFlags, ClassFile, ClassFileVersion};
+use paw_classfile_format::{ClassAccessFlags, ClassFile, ClassFileVersion, class_pool::CPTag};
 
 use crate::{
-	attribute::{BootstrapMethod, LIRAttribute},
+	attribute::{BootstrapMethod, LIRClassAttribute, LIRFieldAttribute, LIRMethodAttribute},
 	field::LIRField,
 	method::LIRMethod,
 };
@@ -16,7 +16,7 @@ pub struct LIRClass {
 	pub interfaces: Vec<String>,     // ClassRef
 	pub fields: Vec<LIRField>,
 	pub methods: Vec<LIRMethod>,
-	pub attributes: Vec<LIRAttribute>,
+	pub attributes: Vec<LIRClassAttribute>,
 }
 
 impl LIRClass {
@@ -53,6 +53,14 @@ impl LIRClass {
 			})
 			.collect::<Vec<String>>();
 
+		let attributes = raw
+			.attributes
+			.into_iter()
+			.map(|attr| LIRClassAttribute::parse(attr, &cp))
+			.collect::<Result<Vec<_>>>()
+			.unwrap();
+		dbg!(&attributes);
+
 		let fields = raw
 			.fields
 			.into_iter()
@@ -66,7 +74,7 @@ impl LIRClass {
 				let attributes = fi
 					.attributes
 					.into_iter()
-					.map(|attr| LIRAttribute::parse(attr, &cp))
+					.map(|attr| LIRFieldAttribute::parse(attr, &cp))
 					.collect::<Result<Vec<_>>>()
 					.unwrap();
 				LIRField {
@@ -95,7 +103,7 @@ impl LIRClass {
 				let attributes = mi
 					.attributes
 					.into_iter()
-					.map(|attr| LIRAttribute::parse(attr, &cp))
+					.map(|attr| LIRMethodAttribute::parse(attr, &cp))
 					.collect::<Result<Vec<_>>>()
 					.unwrap();
 				LIRMethod {
@@ -108,16 +116,9 @@ impl LIRClass {
 			.collect::<Vec<LIRMethod>>();
 		dbg!(&methods);
 
-		let attributes = raw
-			.attributes
-			.into_iter()
-			.map(|attr| LIRAttribute::parse(attr, &cp))
-			.collect::<Result<Vec<LIRAttribute>>>()
-			.unwrap();
-		dbg!(&attributes);
-
+		// FIXME: visit all attributes to validate
 		for attr in attributes.iter() {
-			if let LIRAttribute::Unknown(val) = attr {
+			if let LIRClassAttribute::Unknown(val) = attr {
 				panic!("unknown attribute `{}` in class `{}`", val, this_class)
 			}
 		}

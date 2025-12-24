@@ -19,30 +19,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub enum LIRAttribute {
-	ConstantValue(ConstantValueAttribute),
-	Code(CodeAttribute),
-	StackMapTable(StackMapTableAttribute),
-	Exceptions(ExceptionsAttribute),
+pub enum LIRClassAttribute {
+	SourceFile(SourceFileAttribute),
 	InnerClasses(InnerClassesAttribute),
 	EnclosingMethod(EnclosingMethodAttribute),
-	Synthetic,
-	Signature(SignatureAttribute),
-	SourceFile(SourceFileAttribute),
 	SourceDebugExtension(DebugExtensionAttribute),
-	LineNumberTable(LineNumberTableAttribute),
-	LocalVariableTable(LocalVariableTableAttribute),
-	LocalVariableTypeTable(LocalVariableTypeTableAttribute),
-	Deprecated,
-	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
-	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
-	RuntimeVisibleParameterAnnotations(RuntimeParameterAnnotationsAttribute),
-	RuntimeInvisibleParameterAnnotations(RuntimeParameterAnnotationsAttribute),
-	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
-	RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
-	AnnotationDefault(RuntimeAnnotationValue),
 	BootstrapMethods(BootstrapMethodsAttribute),
-	MethodParameters(MethodParametersAttribute),
 	Module(ModuleAttribute),
 	ModulePackages(ModulePackagesAttribute),
 	ModuleMainClass(ModuleMainClassAttribute),
@@ -50,10 +32,17 @@ pub enum LIRAttribute {
 	NestMembers(NestMembersAttribute),
 	Record(RecordAttribute),
 	PermittedSubclasses(PermittedSubclassesAttribute),
+	Synthetic,
+	Deprecated,
+	Signature(SignatureAttribute),
+	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
 	Unknown(String),
 }
 
-impl LIRAttribute {
+impl LIRClassAttribute {
 	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
 		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
 			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
@@ -63,60 +52,257 @@ impl LIRAttribute {
 
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
-			"ConstantValue" => LIRAttribute::ConstantValue(ConstantValueAttribute::parse(&mut buffer, cp)?),
-			"Code" => LIRAttribute::Code(CodeAttribute::parse(&mut buffer, cp)?),
-			"StackMapTable" => LIRAttribute::StackMapTable(StackMapTableAttribute::parse(&mut buffer, cp)?),
-			"Exceptions" => LIRAttribute::Exceptions(ExceptionsAttribute::parse(&mut buffer, cp)?),
-			"InnerClasses" => LIRAttribute::InnerClasses(InnerClassesAttribute::parse(&mut buffer, cp)?),
-			"EnclosingMethod" => LIRAttribute::EnclosingMethod(EnclosingMethodAttribute::parse(&mut buffer, cp)?),
-			"Synthetic" => LIRAttribute::Synthetic,
-			"Signature" => LIRAttribute::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
-			"SourceFile" => LIRAttribute::SourceFile(SourceFileAttribute::parse(&mut buffer, cp)?),
-			"SourceDebugExtension" => LIRAttribute::SourceDebugExtension(DebugExtensionAttribute::parse(&mut buffer)?),
-			"LineNumberTable" => LIRAttribute::LineNumberTable(LineNumberTableAttribute::parse(&mut buffer)?),
-			"LocalVariableTable" => {
-				LIRAttribute::LocalVariableTable(LocalVariableTableAttribute::parse(&mut buffer, cp)?)
+			"InnerClasses" => LIRClassAttribute::InnerClasses(InnerClassesAttribute::parse(&mut buffer, cp)?),
+			"EnclosingMethod" => LIRClassAttribute::EnclosingMethod(EnclosingMethodAttribute::parse(&mut buffer, cp)?),
+			"Synthetic" => LIRClassAttribute::Synthetic,
+			"Signature" => LIRClassAttribute::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
+			"SourceFile" => LIRClassAttribute::SourceFile(SourceFileAttribute::parse(&mut buffer, cp)?),
+			"SourceDebugExtension" => {
+				LIRClassAttribute::SourceDebugExtension(DebugExtensionAttribute::parse(&mut buffer)?)
 			}
-			"LocalVariableTypeTable" => {
-				LIRAttribute::LocalVariableTypeTable(LocalVariableTypeTableAttribute::parse(&mut buffer, cp)?)
-			}
-			"Deprecated" => LIRAttribute::Deprecated,
+			"Deprecated" => LIRClassAttribute::Deprecated,
 			"RuntimeVisibleAnnotations" => {
-				LIRAttribute::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+				LIRClassAttribute::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
 			}
 			"RuntimeInvisibleAnnotations" => {
-				LIRAttribute::RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+				LIRClassAttribute::RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
 			}
-			"RuntimeVisibleParameterAnnotations" => LIRAttribute::RuntimeVisibleParameterAnnotations(
-				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			"RuntimeVisibleTypeAnnotations" => LIRClassAttribute::RuntimeVisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
 			),
-			"RuntimeInvisibleParameterAnnotations" => LIRAttribute::RuntimeInvisibleParameterAnnotations(
-				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			"RuntimeInvisibleTypeAnnotations" => LIRClassAttribute::RuntimeInvisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
 			),
-			"RuntimeVisibleTypeAnnotations" => {
-				LIRAttribute::RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			"BootstrapMethods" => {
+				LIRClassAttribute::BootstrapMethods(BootstrapMethodsAttribute::parse(&mut buffer, cp)?)
 			}
-			"RuntimeInvisibleTypeAnnotations" => {
-				LIRAttribute::RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?)
-			}
-			"AnnotationDefault" => LIRAttribute::AnnotationDefault(RuntimeAnnotationValue::parse(&mut buffer, cp)?),
-			"BootstrapMethods" => LIRAttribute::BootstrapMethods(BootstrapMethodsAttribute::parse(&mut buffer, cp)?),
-			"MethodParameters" => LIRAttribute::MethodParameters(MethodParametersAttribute::parse(&mut buffer, cp)?),
-			"Module" => LIRAttribute::Module(ModuleAttribute::parse(&mut buffer, cp)?),
-			"ModulePackages" => LIRAttribute::ModulePackages(ModulePackagesAttribute::parse(&mut buffer, cp)?),
-			"ModuleMainClass" => LIRAttribute::ModuleMainClass(ModuleMainClassAttribute::parse(&mut buffer, cp)?),
-			"NestHost" => LIRAttribute::NestHost(NestHostAttribute::parse(&mut buffer, cp)?),
-			"NestMembers" => LIRAttribute::NestMembers(NestMembersAttribute::parse(&mut buffer, cp)?),
-			"Record" => LIRAttribute::Record(RecordAttribute::parse(&mut buffer, cp)?),
+			"Module" => LIRClassAttribute::Module(ModuleAttribute::parse(&mut buffer, cp)?),
+			"ModulePackages" => LIRClassAttribute::ModulePackages(ModulePackagesAttribute::parse(&mut buffer, cp)?),
+			"ModuleMainClass" => LIRClassAttribute::ModuleMainClass(ModuleMainClassAttribute::parse(&mut buffer, cp)?),
+			"NestHost" => LIRClassAttribute::NestHost(NestHostAttribute::parse(&mut buffer, cp)?),
+			"NestMembers" => LIRClassAttribute::NestMembers(NestMembersAttribute::parse(&mut buffer, cp)?),
+			"Record" => LIRClassAttribute::Record(RecordAttribute::parse(&mut buffer, cp)?),
 			"PermittedSubclasses" => {
-				LIRAttribute::PermittedSubclasses(PermittedSubclassesAttribute::parse(&mut buffer, cp)?)
+				LIRClassAttribute::PermittedSubclasses(PermittedSubclassesAttribute::parse(&mut buffer, cp)?)
 			}
-			_ => LIRAttribute::Unknown(name.clone()),
+			_ => {
+				eprintln!("WARN: unknown attribute {}", name);
+				LIRClassAttribute::Unknown(name.clone())
+			}
 		};
 
 		let remaining = buffer.len();
 		if remaining != 0 {
-			// FIXME: reenable this when everything has moved
+			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+		}
+		Ok(kind)
+	}
+}
+
+#[derive(Debug, Clone)]
+pub enum LIRFieldAttribute {
+	ConstantValue(ConstantValueAttribute),
+	Synthetic,
+	Deprecated,
+	Signature(SignatureAttribute),
+	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	Unknown(String),
+}
+
+impl LIRFieldAttribute {
+	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
+		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
+			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
+			_ => unreachable!(),
+		};
+		eprintln!("parsing attr {}", name);
+
+		let mut buffer = raw.info.as_slice();
+		let kind = match name.as_ref() {
+			"ConstantValue" => LIRFieldAttribute::ConstantValue(ConstantValueAttribute::parse(&mut buffer, cp)?),
+			"Synthetic" => LIRFieldAttribute::Synthetic,
+			"Signature" => LIRFieldAttribute::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
+			"Deprecated" => LIRFieldAttribute::Deprecated,
+			"RuntimeVisibleAnnotations" => {
+				LIRFieldAttribute::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeInvisibleAnnotations" => {
+				LIRFieldAttribute::RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeVisibleTypeAnnotations" => LIRFieldAttribute::RuntimeVisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleTypeAnnotations" => LIRFieldAttribute::RuntimeInvisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			_ => {
+				eprintln!("WARN: unknown attribute {}", name);
+				LIRFieldAttribute::Unknown(name.clone())
+			}
+		};
+
+		let remaining = buffer.len();
+		if remaining != 0 {
+			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+		}
+		Ok(kind)
+	}
+}
+
+#[derive(Debug, Clone)]
+pub enum LIRMethodAttribute {
+	Code(CodeAttribute),
+	Exceptions(ExceptionsAttribute),
+	AnnotationDefault(AnnotationDefaultAttribute),
+	MethodParameters(MethodParametersAttribute),
+	Synthetic,
+	Deprecated,
+	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	Unknown(String),
+}
+
+impl LIRMethodAttribute {
+	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
+		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
+			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
+			_ => unreachable!(),
+		};
+		eprintln!("parsing attr {}", name);
+
+		let mut buffer = raw.info.as_slice();
+		let kind = match name.as_ref() {
+			"Code" => LIRMethodAttribute::Code(CodeAttribute::parse(&mut buffer, cp)?),
+			"Exceptions" => LIRMethodAttribute::Exceptions(ExceptionsAttribute::parse(&mut buffer, cp)?),
+			"Synthetic" => LIRMethodAttribute::Synthetic,
+			"Deprecated" => LIRMethodAttribute::Deprecated,
+			"RuntimeVisibleAnnotations" => {
+				LIRMethodAttribute::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeInvisibleAnnotations" => {
+				LIRMethodAttribute::RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeVisibleTypeAnnotations" => LIRMethodAttribute::RuntimeVisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleTypeAnnotations" => LIRMethodAttribute::RuntimeInvisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"AnnotationDefault" => {
+				LIRMethodAttribute::AnnotationDefault(RuntimeAnnotationValue::parse(&mut buffer, cp)?)
+			}
+			"MethodParameters" => {
+				LIRMethodAttribute::MethodParameters(MethodParametersAttribute::parse(&mut buffer, cp)?)
+			}
+			_ => {
+				eprintln!("WARN: unknown attribute {}", name);
+				LIRMethodAttribute::Unknown(name.clone())
+			}
+		};
+
+		let remaining = buffer.len();
+		if remaining != 0 {
+			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+		}
+		Ok(kind)
+	}
+}
+
+#[derive(Debug, Clone)]
+pub enum LIRCodeAttribute {
+	LineNumberTable(LineNumberTableAttribute),
+	LocalVariableTable(LocalVariableTableAttribute),
+	LocalVariableTypeTable(LocalVariableTypeTableAttribute),
+	StackMapTable(StackMapTableAttribute),
+	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	Unknown(String),
+}
+
+impl LIRCodeAttribute {
+	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
+		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
+			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
+			_ => unreachable!(),
+		};
+		eprintln!("parsing attr {}", name);
+
+		let mut buffer = raw.info.as_slice();
+		let kind = match name.as_ref() {
+			"StackMapTable" => LIRCodeAttribute::StackMapTable(StackMapTableAttribute::parse(&mut buffer, cp)?),
+			"LineNumberTable" => LIRCodeAttribute::LineNumberTable(LineNumberTableAttribute::parse(&mut buffer)?),
+			"LocalVariableTable" => {
+				LIRCodeAttribute::LocalVariableTable(LocalVariableTableAttribute::parse(&mut buffer, cp)?)
+			}
+			"LocalVariableTypeTable" => {
+				LIRCodeAttribute::LocalVariableTypeTable(LocalVariableTypeTableAttribute::parse(&mut buffer, cp)?)
+			}
+			"RuntimeVisibleTypeAnnotations" => LIRCodeAttribute::RuntimeVisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleTypeAnnotations" => LIRCodeAttribute::RuntimeInvisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			_ => {
+				eprintln!("WARN: unknown attribute {}", name);
+				LIRCodeAttribute::Unknown(name.clone())
+			}
+		};
+
+		let remaining = buffer.len();
+		if remaining != 0 {
+			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+		}
+		Ok(kind)
+	}
+}
+
+#[derive(Debug, Clone)]
+pub enum LIRRecordComponentAttribute {
+	Signature(SignatureAttribute),
+	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
+	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	RuntimeInvisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
+	Unknown(String),
+}
+
+impl LIRRecordComponentAttribute {
+	pub fn parse(raw: AttributeInfo, cp: &[CPTag]) -> Result<Self> {
+		let name = match cp.get(raw.attribute_name_index as usize - 1).unwrap() {
+			CPTag::Utf8 { bytes } => paw_mutf8::decode(bytes)?.into_owned(),
+			_ => unreachable!(),
+		};
+		eprintln!("parsing attr {}", name);
+
+		let mut buffer = raw.info.as_slice();
+		let kind = match name.as_ref() {
+			"Signature" => LIRRecordComponentAttribute::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
+			"RuntimeVisibleAnnotations" => LIRRecordComponentAttribute::RuntimeVisibleAnnotations(
+				RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleAnnotations" => LIRRecordComponentAttribute::RuntimeInvisibleAnnotations(
+				RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeVisibleTypeAnnotations" => LIRRecordComponentAttribute::RuntimeVisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleTypeAnnotations" => LIRRecordComponentAttribute::RuntimeInvisibleTypeAnnotations(
+				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			_ => {
+				eprintln!("WARN: unknown attribute {}", name);
+				LIRRecordComponentAttribute::Unknown(name.clone())
+			}
+		};
+
+		let remaining = buffer.len();
+		if remaining != 0 {
 			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
 		}
 		Ok(kind)
@@ -166,7 +352,7 @@ pub struct CodeAttribute {
 	pub max_locals: u16,
 	pub code: Vec<Instruction>,
 	pub exception_table: Vec<CodeAttributeException>,
-	pub attributes: Vec<LIRAttribute>,
+	pub attributes: Vec<LIRCodeAttribute>,
 }
 
 impl CodeAttribute {
@@ -211,7 +397,7 @@ impl CodeAttribute {
 		);
 		let attributes = buffer.read_vec_with(attrs_count, |b| {
 			let raw = AttributeInfo::read(b).wrap_err("failed to read attribute from Code attribute")?;
-			LIRAttribute::parse(raw, cp)
+			LIRCodeAttribute::parse(raw, cp)
 		})?;
 
 		let mut code_buffer = Cursor::new(code);
@@ -675,6 +861,8 @@ pub enum RuntimeAnnotationValue {
 	},
 }
 
+pub type AnnotationDefaultAttribute = RuntimeAnnotationValue;
+
 impl RuntimeAnnotationValue {
 	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &[CPTag]) -> Result<Self> {
 		let tag = buffer.read_u8()?;
@@ -1107,7 +1295,7 @@ impl NestMembersAttribute {
 pub struct RecordComponent {
 	pub name: String,
 	pub descriptor: Descriptor,
-	pub attributes: Vec<LIRAttribute>,
+	pub attributes: Vec<LIRRecordComponentAttribute>,
 }
 
 impl RecordComponent {
@@ -1120,7 +1308,7 @@ impl RecordComponent {
 		let descriptor = get_utf8_cp_entry(cp, descriptor_idx)?.parse()?;
 		let attributes = buffer.read_vec_with(attr_count, |b| {
 			let attr_raw = AttributeInfo::read(b)?;
-			LIRAttribute::parse(attr_raw, cp)
+			LIRRecordComponentAttribute::parse(attr_raw, cp)
 		})?;
 		Ok(Self {
 			name,
