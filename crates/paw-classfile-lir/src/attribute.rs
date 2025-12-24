@@ -85,7 +85,7 @@ impl LIRClassAttribute {
 
 		let remaining = buffer.len();
 		if remaining != 0 {
-			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+			bail!("{} extra attribute bytes in {} class attribute data", remaining, name);
 		}
 		Ok(kind)
 	}
@@ -135,7 +135,7 @@ impl LIRFieldAttribute {
 
 		let remaining = buffer.len();
 		if remaining != 0 {
-			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+			bail!("{} extra attribute bytes in {} field attribute data", remaining, name);
 		}
 		Ok(kind)
 	}
@@ -149,6 +149,7 @@ pub enum LIRMethodAttribute {
 	MethodParameters(MethodParametersAttribute),
 	Synthetic,
 	Deprecated,
+	Signature(SignatureAttribute),
 	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
 	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
 	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
@@ -167,6 +168,7 @@ impl LIRMethodAttribute {
 			"Exceptions" => LIRMethodAttribute::Exceptions(ExceptionsAttribute::parse(&mut buffer, cp)?),
 			"Synthetic" => LIRMethodAttribute::Synthetic,
 			"Deprecated" => LIRMethodAttribute::Deprecated,
+			"Signature" => LIRMethodAttribute::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
 			"RuntimeVisibleAnnotations" => {
 				LIRMethodAttribute::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
 			}
@@ -193,7 +195,7 @@ impl LIRMethodAttribute {
 
 		let remaining = buffer.len();
 		if remaining != 0 {
-			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+			bail!("{} extra attribute bytes in {} method attribute data", remaining, name);
 		}
 		Ok(kind)
 	}
@@ -211,7 +213,7 @@ pub enum LIRCodeAttribute {
 }
 
 impl LIRCodeAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool, class_attrs: &[LIRClassAttribute]) -> Result<Self> {
+	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
@@ -239,7 +241,7 @@ impl LIRCodeAttribute {
 
 		let remaining = buffer.len();
 		if remaining != 0 {
-			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+			bail!("{} extra attribute bytes in {} code attribute data", remaining, name);
 		}
 		Ok(kind)
 	}
@@ -283,7 +285,7 @@ impl LIRRecordComponentAttribute {
 
 		let remaining = buffer.len();
 		if remaining != 0 {
-			bail!("{} extra attribute bytes in {} attribute data", remaining, name);
+			bail!("{} extra attribute bytes in {} record attribute data", remaining, name);
 		}
 		Ok(kind)
 	}
@@ -379,7 +381,7 @@ impl CodeAttribute {
 		);
 		let attributes = buffer.read_vec_with(attrs_count, |b| {
 			let raw = AttributeInfo::read(b).wrap_err("failed to read attribute from Code attribute")?;
-			LIRCodeAttribute::parse(raw, cp, class_attrs)
+			LIRCodeAttribute::parse(raw, cp)
 		})?;
 
 		let mut code_buffer = Cursor::new(code);
