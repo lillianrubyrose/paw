@@ -6,7 +6,7 @@ use eyre::{Context, Result, bail};
 use paw_classfile_format::{
 	AttributeInfo, CPTag, InnerClassAccessFlags, ModuleAccessFlags, ModuleExportAccessFlags, ModuleOpenAccessFlags,
 	ModuleRequireAccessFlags, ParameterAccessFlags,
-	class_pool::{self, ConstantPool},
+	class_pool::{self, ConstantPool, MethodTypeTag},
 	descriptor::{Descriptor, MethodDescriptor},
 	ext::ReadBytesExt,
 };
@@ -975,9 +975,21 @@ impl RuntimeTypeAnnotationsAttribute {
 }
 
 #[derive(Debug, Clone)]
+pub enum BootstrapMethodArgument {
+	Int(i32),
+	Long(i64),
+	Float(f32),
+	Double(f64),
+	String(String),
+	Class(String),
+	MethodHandle(LIRMethodHandle),
+	MethodType(MethodDescriptor),
+}
+
+#[derive(Debug, Clone)]
 pub struct BootstrapMethod {
 	pub method: LIRMethodHandle,
-	pub arguments: Vec<CPTag>, // FIXME: Don't store CPTag directly, should be its own union, what tags are valid arguments?
+	pub arguments: Vec<BootstrapMethodArgument>,
 }
 
 impl BootstrapMethod {
@@ -986,12 +998,32 @@ impl BootstrapMethod {
 		let n_args = buffer.read_u16::<BigEndian>()? as usize;
 		let argument_idxs = buffer.read_vec_with(n_args, |b| Ok(b.read_u16::<BigEndian>()?))?;
 
+		let arguments = argument_idxs
+			.into_iter()
+			.map(|idx| {
+				let tag = cp.get_tag(idx)?;
+				Ok(match tag {
+					CPTag::Integer(v) => BootstrapMethodArgument::Int(*v as i32),
+					CPTag::Long(v) => BootstrapMethodArgument::Long(*v as i64),
+					CPTag::Float(v) => BootstrapMethodArgument::Float(*v),
+					CPTag::Double(v) => BootstrapMethodArgument::Double(*v),
+					CPTag::String(tag) => BootstrapMethodArgument::String(cp.resolve_string(tag)?),
+					CPTag::Class(tag) => BootstrapMethodArgument::Class(cp.resolve_class_name(tag)?),
+					CPTag::MethodHandle { .. } => {
+						BootstrapMethodArgument::MethodHandle(LIRMethodHandle::resolve(cp, idx)?)
+					}
+					CPTag::MethodType(MethodTypeTag { descriptor_index }) => {
+						let desc = cp.get_utf8(*descriptor_index)?;
+						BootstrapMethodArgument::MethodType(desc.parse()?)
+					}
+					_ => bail!("Invalid bootstrap argument tag: {:?}", tag),
+				})
+			})
+			.collect::<Result<Vec<_>>>()?;
+
 		Ok(Self {
 			method: LIRMethodHandle::resolve(cp, method_idx)?,
-			arguments: argument_idxs
-				.into_iter()
-				.map(|idx| Ok(cp.get_tag(idx).cloned()?))
-				.collect::<Result<Vec<_>>>()?,
+			arguments,
 		})
 	}
 }

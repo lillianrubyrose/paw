@@ -9,7 +9,10 @@ use paw_classfile_format::{
 	ext::ReadBytesExt,
 };
 
-use crate::{attribute::LIRClassAttribute, method::LIRMethodHandle};
+use crate::{
+	attribute::{BootstrapMethodArgument, LIRClassAttribute},
+	method::LIRMethodHandle,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -742,7 +745,7 @@ pub enum Instruction {
 		name: String,
 		descriptor: MethodDescriptor,
 		is_interface: bool,
-		bsm_args: Vec<CPTag>, // FIXME: Don't store CPTag directly, should be its own union, what tags are valid arguments?
+		bsm_args: Vec<BootstrapMethodArgument>,
 	},
 
 	/// Invoke interface method

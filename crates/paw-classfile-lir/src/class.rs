@@ -190,4 +190,21 @@ mod tests {
 		}
 		Ok(())
 	}
+
+	#[test]
+	fn parse_indy() -> eyre::Result<()> {
+		println!("{}", std::env::current_dir().unwrap().display());
+		for entry in fs::read_dir("../../test_data/indy").unwrap() {
+			let entry = entry.unwrap();
+			let path = entry.path();
+			if path.is_file() && path.extension().unwrap() == "class" {
+				let hello_world_class = fs::read(path).unwrap();
+				let mut cursor = Cursor::new(hello_world_class);
+				let cf = ClassFile::read(&mut cursor).unwrap();
+				let lir_cf = LIRClass::parse(cf);
+				println!("{lir_cf:#?}");
+			};
+		}
+		Ok(())
+	}
 }
