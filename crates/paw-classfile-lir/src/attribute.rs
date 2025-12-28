@@ -150,6 +150,8 @@ pub enum LIRMethodAttribute {
 	Synthetic,
 	Deprecated,
 	Signature(SignatureAttribute),
+	RuntimeVisibleParameterAnnotations(RuntimeParameterAnnotationsAttribute),
+	RuntimeInvisibleParameterAnnotations(RuntimeParameterAnnotationsAttribute),
 	RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute),
 	RuntimeInvisibleAnnotations(RuntimeAnnotationsAttribute),
 	RuntimeVisibleTypeAnnotations(RuntimeTypeAnnotationsAttribute),
@@ -169,6 +171,12 @@ impl LIRMethodAttribute {
 			"Synthetic" => LIRMethodAttribute::Synthetic,
 			"Deprecated" => LIRMethodAttribute::Deprecated,
 			"Signature" => LIRMethodAttribute::Signature(SignatureAttribute::parse(&mut buffer, cp)?),
+			"RuntimeVisibleParameterAnnotations" => LIRMethodAttribute::RuntimeVisibleParameterAnnotations(
+				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
+			"RuntimeInvisibleParameterAnnotations" => LIRMethodAttribute::RuntimeInvisibleParameterAnnotations(
+				RuntimeParameterAnnotationsAttribute::parse(&mut buffer, cp)?,
+			),
 			"RuntimeVisibleAnnotations" => {
 				LIRMethodAttribute::RuntimeVisibleAnnotations(RuntimeAnnotationsAttribute::parse(&mut buffer, cp)?)
 			}
@@ -330,7 +338,8 @@ pub struct CodeAttributeException {
 pub struct CodeAttribute {
 	pub max_stack: u16,
 	pub max_locals: u16,
-	pub code: Vec<Instruction>,
+	/// offset, instruction pairs
+	pub code: Vec<(u64, Instruction)>,
 	pub exception_table: Vec<CodeAttributeException>,
 	pub attributes: Vec<LIRCodeAttribute>,
 }
@@ -389,8 +398,11 @@ impl CodeAttribute {
 		while code_buffer.position() < code_buffer.get_ref().len() as u64 {
 			let instruction = Instruction::parse(&mut code_buffer, cp, class_attrs)?;
 			println!("parsed: {:?}", instruction);
-			code.push(instruction);
+			code.push((code_buffer.position(), instruction));
 		}
+
+		// TODO:
+		// resolve labels for instructions
 
 		Ok(CodeAttribute {
 			max_stack,
