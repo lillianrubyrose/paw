@@ -1,8 +1,10 @@
+use std::str::FromStr;
+
 use eyre::bail;
 use paw_classfile_format::{
 	CPTag, MethodAccessFlags,
 	class_pool::{ConstantPool, FieldRefTag, InterfaceMethodRefTag, MethodHandleTag, MethodRefTag},
-	descriptor::MethodDescriptor,
+	descriptor::{Descriptor, MethodDescriptor},
 };
 use thiserror::Error;
 
@@ -21,6 +23,15 @@ pub enum LIRMethodHandleKind {
 	InvokeSpecial,
 	NewInvokeSpecial,
 	InvokeInterface,
+}
+
+impl LIRMethodHandleKind {
+	pub fn is_field(&self) -> bool {
+		matches!(
+			self,
+			Self::GetField | Self::GetStatic | Self::PutField | Self::PutStatic
+		)
+	}
 }
 
 #[derive(Debug, Error)]
@@ -52,13 +63,19 @@ impl From<LIRMethodHandleKind> for u8 {
 	}
 }
 
+#[derive(Debug, Clone)]
+pub enum LIRHandleDescriptor {
+	Field(Descriptor),
+	Method(MethodDescriptor),
+}
+
 // https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.8
 #[derive(Debug, Clone)]
 pub struct LIRMethodHandle {
 	pub kind: LIRMethodHandleKind,
 	pub owner: String,
 	pub name: String,
-	pub descriptor: MethodDescriptor,
+	pub descriptor: LIRHandleDescriptor,
 	pub is_interface: bool,
 }
 
@@ -91,7 +108,13 @@ impl LIRMethodHandle {
 		let owner = cp.resolve_class_name(owner)?;
 
 		let nat = cp.get_name_and_type(name_and_ty_index)?;
-		let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
+		let name = cp.get_utf8(nat.name_index)?;
+		let descriptor = cp.get_utf8(nat.descriptor_index)?;
+		let descriptor = if kind.is_field() {
+			LIRHandleDescriptor::Field(Descriptor::from_str(&descriptor)?)
+		} else {
+			LIRHandleDescriptor::Method(MethodDescriptor::from_str(&descriptor)?)
+		};
 
 		Ok(Self {
 			kind,

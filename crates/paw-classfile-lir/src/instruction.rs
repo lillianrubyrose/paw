@@ -311,7 +311,46 @@ pub mod opcodes {
 	pub const SIPUSH: u8 = 0x11;
 	pub const SWAP: u8 = 0x5F;
 
+	pub const TABLESWITCH: u8 = 0xAA;
+
 	pub const WIDE: u8 = 0xC4;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LIRResolvedLabel(u32);
+
+impl LIRResolvedLabel {
+	/// This method performs no unsafe actions and is only unsafe for semantic reasoning
+	pub const unsafe fn new_unchecked(id: u32) -> Self {
+		Self(id)
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum LIRLabel {
+	/// An unresolved label contains the address (absoltute bytecode index / pc) of its target instruction.
+	/// This is used for labels that are not yet resolved and need to be resolved after all instructions have been parsed.
+	Unresolved(i32),
+
+	/// A resolved label has an internal id used for state keeping and comparison
+	/// Labels stored among instructions should ALWAYS be resolved and the library will panic otherwise.
+	Resolved(LIRResolvedLabel),
+}
+
+impl LIRLabel {
+	pub const fn is_resolved(&self) -> bool {
+		match self {
+			LIRLabel::Unresolved(_) => false,
+			LIRLabel::Resolved(_) => true,
+		}
+	}
+
+	pub const fn is_unresolved(&self) -> bool {
+		match self {
+			LIRLabel::Unresolved(_) => true,
+			LIRLabel::Resolved(_) => false,
+		}
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -587,13 +626,13 @@ pub enum Instruction {
 	/// Branch always
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto
 	Goto {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 
 	/// Branch always (wide index)
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto_w
 	GotoW {
-		branch_offset: i32,
+		target: LIRLabel,
 	},
 
 	/// Convert int to byte
@@ -650,64 +689,64 @@ pub enum Instruction {
 	/// Branch if reference comparison succeeds
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_acmp_cond
 	IfACmpEq {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfACmpNe {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 
 	/// Branch if int comparison succeeds
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_icmp_cond
 	IfICmpEq {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfICmpNe {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfICmpLt {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfICmpGt {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfICmpLe {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfICmpGe {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 
 	/// Branch if int comparison with zero succeeds
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_cond
 	IfEq {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfNe {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfLt {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfGt {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfLe {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 	IfGe {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 
 	/// Branch if reference not null
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnonnull
 	IfNonNull {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 
 	/// Branch if reference is null
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnull
 	IfNull {
-		branch_offset: i16,
+		target: LIRLabel,
 	},
 
 	/// Increment local variable by constant
@@ -825,13 +864,13 @@ pub enum Instruction {
 	/// Jump subroutine
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr
 	Jsr {
-		offset: i16,
+		target: LIRLabel,
 	},
 
 	/// Jump subroutine (wide index)
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr_w
 	JsrW {
-		offset: i32,
+		target: LIRLabel,
 	},
 
 	/// Convert long to double
@@ -900,7 +939,9 @@ pub enum Instruction {
 	/// Access jump table by key match and jump
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lookupswitch
 	LookupSwitch {
-		// FIXME: jesus christ what is this
+		default_target: LIRLabel,
+		/// List of (match key, target_label)
+		pairs: Vec<(i32, LIRLabel)>,
 	},
 
 	/// Bitwise OR long
@@ -1028,7 +1069,10 @@ pub enum Instruction {
 	/// Access jump table by index and jump
 	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.tableswitch
 	TableSwitch {
-		// FIXME: also horrible
+		default_target: LIRLabel,
+		low: i32,
+		high: i32,
+		targets: Vec<LIRLabel>,
 	},
 }
 
@@ -1059,6 +1103,7 @@ impl Instruction {
 		buffer: &mut B,
 		cp: &ConstantPool,
 		class_attrs: &[LIRClassAttribute],
+		pc: u32,
 	) -> Result<Self> {
 		let mut opcode = buffer.read_u8()?;
 		let is_wide = if opcode == opcodes::WIDE {
@@ -1068,6 +1113,7 @@ impl Instruction {
 			false
 		};
 
+		let calc_jmp_target = |offset: i32| -> LIRLabel { LIRLabel::Unresolved((pc as i32).wrapping_add(offset)) };
 		let inst = match opcode {
 			opcodes::AALOAD => Instruction::AALoad,
 			opcodes::AASTORE => Instruction::AAStore,
@@ -1224,10 +1270,10 @@ impl Instruction {
 				}
 			}
 			opcodes::GOTO => Instruction::Goto {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::GOTO_W => Instruction::GotoW {
-				branch_offset: buffer.read_i32::<BigEndian>()?,
+				target: calc_jmp_target(buffer.read_i32::<BigEndian>()?),
 			},
 			opcodes::I2B => Instruction::I2B,
 			opcodes::I2C => Instruction::I2C,
@@ -1248,52 +1294,52 @@ impl Instruction {
 			opcodes::ICONST_5 => Instruction::IConst { val: 5 },
 			opcodes::IDIV => Instruction::IDiv,
 			opcodes::IF_ACMPEQ => Instruction::IfACmpEq {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IF_ACMPNE => Instruction::IfACmpNe {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IF_ICMPEQ => Instruction::IfICmpEq {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IF_ICMPNE => Instruction::IfICmpNe {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IF_ICMPLT => Instruction::IfICmpLt {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IF_ICMPGE => Instruction::IfICmpGe {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IF_ICMPGT => Instruction::IfICmpGt {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IF_ICMPLE => Instruction::IfICmpLe {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFEQ => Instruction::IfEq {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFNE => Instruction::IfNe {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFLT => Instruction::IfLt {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFGE => Instruction::IfGe {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFGT => Instruction::IfGt {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFLE => Instruction::IfLe {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFNONNULL => Instruction::IfNonNull {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IFNULL => Instruction::IfNull {
-				branch_offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::IINC => {
 				let (local_index, val) = if is_wide {
@@ -1469,10 +1515,10 @@ impl Instruction {
 			opcodes::IUSHR => Instruction::IUShr,
 			opcodes::IXOR => Instruction::IXor,
 			opcodes::JSR => Instruction::Jsr {
-				offset: buffer.read_i16::<BigEndian>()?,
+				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
 			opcodes::JSR_W => Instruction::JsrW {
-				offset: buffer.read_i32::<BigEndian>()?,
+				target: calc_jmp_target(buffer.read_i32::<BigEndian>()?),
 			},
 			opcodes::L2D => Instruction::LongToDouble,
 			opcodes::L2F => Instruction::LongToFloat,
@@ -1525,7 +1571,32 @@ impl Instruction {
 			opcodes::LLOAD_3 => Instruction::LLoad { local_idx: 3 },
 			opcodes::LMUL => Instruction::LMul,
 			opcodes::LNEG => Instruction::LNeg,
-			// FIXME: lookupswitch
+			opcodes::LOOKUPSWITCH => {
+				let current_offset = pc + 1;
+				let padding = (4 - (current_offset % 4)) % 4;
+
+				for _ in 0..padding {
+					buffer.read_u8()?;
+				}
+
+				let default_offset = buffer.read_i32::<BigEndian>()?;
+				let default_target = LIRLabel::Unresolved((pc as i32).wrapping_add(default_offset));
+
+				let npairs = buffer.read_i32::<BigEndian>()?;
+				if npairs < 0 {
+					bail!("lookupswitch npairs must be >= 0");
+				}
+
+				let mut pairs = Vec::with_capacity(npairs as usize);
+				for _ in 0..npairs {
+					let match_key = buffer.read_i32::<BigEndian>()?;
+					let offset = buffer.read_i32::<BigEndian>()?;
+					let target = LIRLabel::Unresolved((pc as i32).wrapping_add(offset));
+					pairs.push((match_key, target));
+				}
+
+				Instruction::LookupSwitch { default_target, pairs }
+			}
 			opcodes::LOR => Instruction::LOr,
 			opcodes::LREM => Instruction::LRem,
 			opcodes::LRETURN => Instruction::LReturn,
@@ -1612,7 +1683,43 @@ impl Instruction {
 				val: buffer.read_i16::<BigEndian>()?,
 			},
 			opcodes::SWAP => Instruction::Swap,
-			// TODO: tableswitch
+			opcodes::TABLESWITCH => {
+				let current_offset = pc + 1;
+				let padding = (4 - (current_offset % 4)) % 4;
+
+				for _ in 0..padding {
+					buffer.read_u8()?;
+				}
+
+				let default_offset = buffer.read_i32::<BigEndian>()?;
+				let default_target = LIRLabel::Unresolved((pc as i32).wrapping_add(default_offset));
+
+				let low = buffer.read_i32::<BigEndian>()?;
+				let high = buffer.read_i32::<BigEndian>()?;
+
+				if low > high {
+					bail!("tableswitch low ({}) must be <= high ({})", low, high);
+				}
+
+				let count = (high as i64) - (low as i64) + 1;
+				if count > 65535 {
+					panic!("handle this case")
+				}
+
+				let mut targets = Vec::with_capacity(count as usize);
+				for _ in 0..count {
+					let offset = buffer.read_i32::<BigEndian>()?;
+					let target = LIRLabel::Unresolved((pc as i32).wrapping_add(offset));
+					targets.push(target);
+				}
+
+				Instruction::TableSwitch {
+					default_target,
+					low,
+					high,
+					targets,
+				}
+			}
 			opcode => bail!("Unrecognized opcode: {} : 0x{:X}", opcode, opcode),
 		};
 		Ok(inst)

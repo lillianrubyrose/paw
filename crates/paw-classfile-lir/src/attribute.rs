@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::{collections::HashMap, io::Cursor};
 
 use bytemuck::AnyBitPattern;
 use byteorder::BigEndian;
@@ -11,7 +11,10 @@ use paw_classfile_format::{
 	ext::ReadBytesExt,
 };
 
-use crate::{instruction::Instruction, method::LIRMethodHandle};
+use crate::{
+	instruction::{Instruction, LIRLabel, LIRResolvedLabel},
+	method::LIRMethodHandle,
+};
 
 #[derive(Debug, Clone)]
 pub enum LIRClassAttribute {
@@ -338,8 +341,8 @@ pub struct CodeAttributeException {
 pub struct CodeAttribute {
 	pub max_stack: u16,
 	pub max_locals: u16,
-	/// offset, instruction pairs
-	pub code: Vec<(u64, Instruction)>,
+	/// offset (pc), instruction, resolved labels pairs
+	pub code: Vec<(u32, Instruction, Vec<LIRLabel>)>,
 	pub exception_table: Vec<CodeAttributeException>,
 	pub attributes: Vec<LIRCodeAttribute>,
 }
@@ -394,15 +397,87 @@ impl CodeAttribute {
 		})?;
 
 		let mut code_buffer = Cursor::new(code);
-		let mut code = Vec::new();
+		let mut code: Vec<(u32, Instruction, Vec<LIRLabel>)> = Vec::new();
 		while code_buffer.position() < code_buffer.get_ref().len() as u64 {
-			let instruction = Instruction::parse(&mut code_buffer, cp, class_attrs)?;
-			println!("parsed: {:?}", instruction);
-			code.push((code_buffer.position(), instruction));
+			let pc = code_buffer.position() as u32;
+			let instruction = Instruction::parse(&mut code_buffer, cp, class_attrs, pc)?;
+			code.push((pc, instruction, Vec::new()));
 		}
 
-		// TODO:
-		// resolve labels for instructions
+		let mut pc_to_label: HashMap<u32, LIRResolvedLabel> = HashMap::new();
+		let mut next_label = 0;
+		let mut allocate_label = |target_pc: u32| -> LIRResolvedLabel {
+			*pc_to_label.entry(target_pc).or_insert_with(|| {
+				let label = unsafe { LIRResolvedLabel::new_unchecked(next_label) };
+				next_label += 1;
+				label
+			})
+		};
+
+		let mut resolve_unresolved_label = |label: &mut LIRLabel| {
+			if let LIRLabel::Unresolved(pc) = label {
+				*label = LIRLabel::Resolved(allocate_label(*pc as u32));
+			}
+		};
+
+		for (_, inst, _) in &mut code {
+			match inst {
+				Instruction::Goto { target }
+				| Instruction::GotoW { target }
+				| Instruction::IfEq { target }
+				| Instruction::IfNe { target }
+				| Instruction::IfLt { target }
+				| Instruction::IfGe { target }
+				| Instruction::IfGt { target }
+				| Instruction::IfLe { target }
+				| Instruction::IfICmpEq { target }
+				| Instruction::IfICmpNe { target }
+				| Instruction::IfICmpLt { target }
+				| Instruction::IfICmpGe { target }
+				| Instruction::IfICmpGt { target }
+				| Instruction::IfICmpLe { target }
+				| Instruction::IfACmpEq { target }
+				| Instruction::IfACmpNe { target }
+				| Instruction::IfNull { target }
+				| Instruction::IfNonNull { target }
+				| Instruction::Jsr { target }
+				| Instruction::JsrW { target } => {
+					resolve_unresolved_label(target);
+				}
+
+				Instruction::LookupSwitch { default_target, pairs } => {
+					resolve_unresolved_label(default_target);
+					for (_, target) in pairs {
+						resolve_unresolved_label(target);
+					}
+				}
+
+				Instruction::TableSwitch {
+					default_target,
+					targets,
+					..
+				} => {
+					resolve_unresolved_label(default_target);
+					for target in targets {
+						resolve_unresolved_label(target);
+					}
+				}
+				_ => {}
+			}
+		}
+
+		for exception in &exception_table {
+			allocate_label(exception.handler_pc as u32);
+		}
+
+		// FIXME: Ogay, but what if multiple labels point to the same instruction, this code doesn't allow for that
+		for (pc, _, labels) in &mut code {
+			if let Some(resolved_label) = pc_to_label.get(pc) {
+				labels.push(LIRLabel::Resolved(*resolved_label));
+			}
+		}
+
+		println!("{:#?}", code);
 
 		Ok(CodeAttribute {
 			max_stack,
