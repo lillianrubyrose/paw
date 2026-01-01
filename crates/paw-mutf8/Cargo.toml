@@ -3,5 +3,9 @@ name = "paw_mutf8"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 thiserror.workspace = true
+num-conv = "0.2.0"

@@ -3,6 +3,9 @@ name = "paw_classfile_lir"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 paw_classfile_format = { path = "../paw-classfile-format" }
 paw_mutf8 = { path = "../paw-mutf8" }

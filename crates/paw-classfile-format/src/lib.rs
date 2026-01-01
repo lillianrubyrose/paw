@@ -11,7 +11,7 @@ pub mod class_pool;
 pub mod descriptor;
 pub mod ext;
 
-pub const CLASSFILE_MAGIC: u32 = 0xCAFEBABE;
+pub const CLASSFILE_MAGIC: u32 = 0xCAFE_BABE;
 
 #[derive(Debug, Error)]
 pub enum ClassFileReadError {
@@ -95,7 +95,7 @@ impl ClassFile {
 		buffer.write_u16::<BigEndian>(self.super_class)?;
 
 		debug_assert!(
-			self.interfaces.len() <= u16::MAX as usize,
+			u16::try_from(self.interfaces.len()).is_ok(),
 			"class has too many interfaces"
 		);
 		buffer.write_u16::<BigEndian>(self.interfaces.len().truncate())?;
@@ -103,20 +103,20 @@ impl ClassFile {
 			buffer.write_u16::<BigEndian>(*iface)?;
 		}
 
-		debug_assert!(self.fields.len() <= u16::MAX as usize, "class has too many fields");
+		debug_assert!(u16::try_from(self.fields.len()).is_ok(), "class has too many fields");
 		buffer.write_u16::<BigEndian>(self.fields.len().truncate())?;
 		for field in &self.fields {
 			field.write(buffer)?;
 		}
 
-		debug_assert!(self.methods.len() <= u16::MAX as usize, "class has too many methods");
+		debug_assert!(u16::try_from(self.methods.len()).is_ok(), "class has too many methods");
 		buffer.write_u16::<BigEndian>(self.methods.len().truncate())?;
 		for method in &self.methods {
 			method.write(buffer)?;
 		}
 
 		debug_assert!(
-			self.attributes.len() <= u16::MAX as usize,
+			u16::try_from(self.attributes.len()).is_ok(),
 			"class has too many attributes"
 		);
 		buffer.write_u16::<BigEndian>(self.attributes.len().truncate())?;
@@ -145,7 +145,8 @@ impl AttributeInfo {
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
 		buffer.write_u16::<BigEndian>(self.attribute_name_index)?;
-		debug_assert!(self.info.len() <= u32::MAX as usize, "attribute info too large");
+		debug_assert!(u32::try_from(self.info.len()).is_ok(), "attribute info too large");
+		#[allow(clippy::cast_possible_truncation, reason = "checked above")]
 		buffer.write_u32::<BigEndian>(self.info.len() as u32)?;
 		buffer.write_all(&self.info)?;
 		Ok(())
@@ -347,7 +348,7 @@ impl FieldInfo {
 		buffer.write_u16::<BigEndian>(self.descriptor_index)?;
 
 		debug_assert!(
-			self.attributes.len() <= u16::MAX as usize,
+			u16::try_from(self.attributes.len()).is_ok(),
 			"field {} has too many attributes",
 			self.name_index
 		);
@@ -389,7 +390,7 @@ impl MethodInfo {
 		buffer.write_u16::<BigEndian>(self.descriptor_index)?;
 
 		debug_assert!(
-			self.attributes.len() <= u16::MAX as usize,
+			u16::try_from(self.attributes.len()).is_ok(),
 			"method {} has too many attributes",
 			self.name_index
 		);

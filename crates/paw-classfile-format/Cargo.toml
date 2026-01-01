@@ -3,6 +3,9 @@ name = "paw_classfile_format"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 byteorder.workspace = true
 thiserror.workspace = true

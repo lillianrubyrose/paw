@@ -28,6 +28,7 @@ impl FromStr for Descriptor {
 }
 
 impl Descriptor {
+	#[must_use]
 	pub fn jvm_repr(&self) -> String {
 		match self {
 			Descriptor::Byte => "B".to_string(),
@@ -134,6 +135,7 @@ impl FromStr for MethodDescriptor {
 }
 
 impl MethodDescriptor {
+	#[must_use]
 	pub fn jvm_repr(&self) -> String {
 		let mut s = String::new();
 		s.push('(');

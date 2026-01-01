@@ -41,7 +41,7 @@ pub enum LIRClassAttribute {
 }
 
 impl LIRClassAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
@@ -108,7 +108,7 @@ pub enum LIRFieldAttribute {
 }
 
 impl LIRFieldAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
@@ -163,7 +163,7 @@ pub enum LIRMethodAttribute {
 }
 
 impl LIRMethodAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool, class_attrs: &[LIRClassAttribute]) -> Result<Self> {
+	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool, class_attrs: &[LIRClassAttribute]) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
@@ -224,7 +224,7 @@ pub enum LIRCodeAttribute {
 }
 
 impl LIRCodeAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
@@ -269,7 +269,7 @@ pub enum LIRRecordComponentAttribute {
 }
 
 impl LIRRecordComponentAttribute {
-	pub fn parse(raw: AttributeInfo, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 		eprintln!("parsing attr {}", name);
 
@@ -393,12 +393,16 @@ impl CodeAttribute {
 		);
 		let attributes = buffer.read_vec_with(attrs_count, |b| {
 			let raw = AttributeInfo::read(b).wrap_err("failed to read attribute from Code attribute")?;
-			LIRCodeAttribute::parse(raw, cp)
+			LIRCodeAttribute::parse(&raw, cp)
 		})?;
 
 		let mut code_buffer = Cursor::new(code);
 		let mut code: Vec<(u32, Instruction, Vec<LIRLabel>)> = Vec::new();
 		while code_buffer.position() < code_buffer.get_ref().len() as u64 {
+			#[allow(
+				clippy::cast_possible_truncation,
+				reason = "length shouldnt be >u32::MAX per jvm spec"
+			)]
 			let pc = code_buffer.position() as u32;
 			let instruction = Instruction::parse(&mut code_buffer, cp, class_attrs, pc)?;
 			code.push((pc, instruction, Vec::new()));
@@ -416,7 +420,7 @@ impl CodeAttribute {
 
 		let mut resolve_unresolved_label = |label: &mut LIRLabel| {
 			if let LIRLabel::Unresolved(pc) = label {
-				*label = LIRLabel::Resolved(allocate_label(*pc as u32));
+				*label = LIRLabel::Resolved(allocate_label(pc.cast_unsigned()));
 			}
 		};
 
@@ -467,10 +471,9 @@ impl CodeAttribute {
 		}
 
 		for exception in &exception_table {
-			allocate_label(exception.handler_pc as u32);
+			allocate_label(u32::from(exception.handler_pc));
 		}
 
-		// FIXME: Ogay, but what if multiple labels point to the same instruction, this code doesn't allow for that
 		for (pc, _, labels) in &mut code {
 			if let Some(resolved_label) = pc_to_label.get(pc) {
 				labels.push(LIRLabel::Resolved(*resolved_label));
@@ -521,15 +524,16 @@ pub enum StackMapFrame {
 }
 
 impl StackMapFrame {
-	pub fn offset_delta(&self) -> u16 {
+	#[must_use]
+	pub const fn offset_delta(&self) -> u16 {
 		match self {
 			StackMapFrame::SameFrame { frame_type } => *frame_type as u16,
 			StackMapFrame::SameLocals1StackItemFrame { frame_type, .. } => *frame_type as u16 - 64,
-			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, .. } => *offset_delta,
-			StackMapFrame::ChopFrame { offset_delta, .. } => *offset_delta,
-			StackMapFrame::SameFrameExtended { offset_delta, .. } => *offset_delta,
-			StackMapFrame::AppendFrame { offset_delta, .. } => *offset_delta,
-			StackMapFrame::FullFrame { offset_delta, .. } => *offset_delta,
+			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, .. }
+			| StackMapFrame::ChopFrame { offset_delta, .. }
+			| StackMapFrame::SameFrameExtended { offset_delta, .. }
+			| StackMapFrame::AppendFrame { offset_delta, .. }
+			| StackMapFrame::FullFrame { offset_delta, .. } => *offset_delta,
 		}
 	}
 
@@ -609,7 +613,7 @@ impl StackMapTableAttribute {
 
 #[derive(Debug, Clone)]
 pub struct ExceptionsAttribute {
-	exception_classes: Vec<String>,
+	pub exception_classes: Vec<String>,
 }
 
 impl ExceptionsAttribute {
@@ -715,7 +719,7 @@ impl EnclosingMethodAttribute {
 #[derive(Debug, Clone)]
 pub struct SignatureAttribute {
 	// FIXME: more structured data?
-	signature: String,
+	pub signature: String,
 }
 
 impl SignatureAttribute {
@@ -730,7 +734,7 @@ impl SignatureAttribute {
 
 #[derive(Debug, Clone)]
 pub struct SourceFileAttribute {
-	source_file: String,
+	pub source_file: String,
 }
 
 impl SourceFileAttribute {
@@ -745,7 +749,7 @@ impl SourceFileAttribute {
 
 #[derive(Debug, Clone)]
 pub struct DebugExtensionAttribute {
-	debug_data: Vec<u8>,
+	pub debug_data: Vec<u8>,
 }
 
 impl DebugExtensionAttribute {
@@ -1078,8 +1082,8 @@ impl BootstrapMethod {
 			.map(|idx| {
 				let tag = cp.get_tag(idx)?;
 				Ok(match tag {
-					CPTag::Integer(v) => BootstrapMethodArgument::Int(*v as i32),
-					CPTag::Long(v) => BootstrapMethodArgument::Long(*v as i64),
+					CPTag::Integer(v) => BootstrapMethodArgument::Int(v.cast_signed()),
+					CPTag::Long(v) => BootstrapMethodArgument::Long(v.cast_signed()),
 					CPTag::Float(v) => BootstrapMethodArgument::Float(*v),
 					CPTag::Double(v) => BootstrapMethodArgument::Double(*v),
 					CPTag::String(tag) => BootstrapMethodArgument::String(cp.resolve_string(tag)?),
@@ -1125,7 +1129,7 @@ pub struct MethodParameterEntry {
 
 #[derive(Debug, Clone)]
 pub struct MethodParametersAttribute {
-	parameters: Vec<MethodParameterEntry>,
+	pub parameters: Vec<MethodParameterEntry>,
 }
 
 impl MethodParametersAttribute {
@@ -1319,7 +1323,7 @@ impl ModuleMainClassAttribute {
 
 #[derive(Debug, Clone)]
 pub struct NestHostAttribute {
-	host_class: String,
+	pub host_class: String,
 }
 
 impl NestHostAttribute {
@@ -1331,7 +1335,7 @@ impl NestHostAttribute {
 
 #[derive(Debug, Clone)]
 pub struct NestMembersAttribute {
-	member_classes: Vec<String>,
+	pub member_classes: Vec<String>,
 }
 
 impl NestMembersAttribute {
@@ -1361,7 +1365,7 @@ impl RecordComponent {
 		let descriptor = cp.get_utf8(descriptor_idx)?.parse()?;
 		let attributes = buffer.read_vec_with(attr_count, |b| {
 			let attr_raw = AttributeInfo::read(b)?;
-			LIRRecordComponentAttribute::parse(attr_raw, cp)
+			LIRRecordComponentAttribute::parse(&attr_raw, cp)
 		})?;
 		Ok(Self {
 			name,
@@ -1373,7 +1377,7 @@ impl RecordComponent {
 
 #[derive(Debug, Clone)]
 pub struct RecordAttribute {
-	components: Vec<RecordComponent>,
+	pub components: Vec<RecordComponent>,
 }
 
 impl RecordAttribute {
@@ -1386,7 +1390,7 @@ impl RecordAttribute {
 
 #[derive(Debug, Clone)]
 pub struct PermittedSubclassesAttribute {
-	subclasses: Vec<String>,
+	pub subclasses: Vec<String>,
 }
 
 impl PermittedSubclassesAttribute {
@@ -1439,7 +1443,7 @@ impl VerificationTypeInfo {
 
 #[derive(Debug, Clone)]
 #[repr(u8)]
-/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.20.2
+/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.20.2>
 pub enum TypePathPart {
 	/// Annotation is deeper in an array type.
 	ArrayElement = 0,

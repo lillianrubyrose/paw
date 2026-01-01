@@ -26,7 +26,8 @@ pub enum LIRMethodHandleKind {
 }
 
 impl LIRMethodHandleKind {
-	pub fn is_field(&self) -> bool {
+	#[must_use]
+	pub const fn is_field(&self) -> bool {
 		matches!(
 			self,
 			Self::GetField | Self::GetStatic | Self::PutField | Self::PutStatic
@@ -92,8 +93,8 @@ impl LIRMethodHandle {
 			CPTag::FieldRef(FieldRefTag {
 				class_index,
 				name_and_ty_index,
-			}) => (*class_index, *name_and_ty_index, false),
-			CPTag::MethodRef(MethodRefTag {
+			})
+			| CPTag::MethodRef(MethodRefTag {
 				class_index,
 				name_and_ty_index,
 			}) => (*class_index, *name_and_ty_index, false),

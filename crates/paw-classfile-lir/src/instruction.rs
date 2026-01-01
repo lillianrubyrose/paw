@@ -317,10 +317,13 @@ pub mod opcodes {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct LIRResolvedLabel(u32);
+#[allow(unused, reason = "writing not implemented yet")]
+pub struct LIRResolvedLabel(/* private */ u32);
 
 impl LIRResolvedLabel {
 	/// This method performs no unsafe actions and is only unsafe for semantic reasoning
+	#[must_use]
+	#[allow(clippy::missing_safety_doc, reason = "doesn't actually contain any unsafe code")]
 	pub const unsafe fn new_unchecked(id: u32) -> Self {
 		Self(id)
 	}
@@ -338,6 +341,7 @@ pub enum LIRLabel {
 }
 
 impl LIRLabel {
+	#[must_use]
 	pub const fn is_resolved(&self) -> bool {
 		match self {
 			LIRLabel::Unresolved(_) => false,
@@ -345,6 +349,7 @@ impl LIRLabel {
 		}
 	}
 
+	#[must_use]
 	pub const fn is_unresolved(&self) -> bool {
 		match self {
 			LIRLabel::Unresolved(_) => true,
@@ -368,67 +373,67 @@ pub enum LIRLDCConstant {
 #[derive(Debug, Clone)]
 pub enum Instruction {
 	/// Load reference from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aaload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aaload>
 	AALoad,
 
 	/// Store reference to array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aastore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aastore>
 	AAStore,
 
 	/// Push null
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aconst_null
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aconst_null>
 	AConstNull,
 
 	/// Load reference from local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.aload>
 	/// NOTE: we eagerly expand aload_{0,1,2,3} to this form.
 	ALoad {
 		local_idx: u16,
 	},
 
 	/// Create a new array of refrence
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.anewarray
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.anewarray>
 	ANewArray {
 		element_ty: String,
 	},
 
 	/// Return reference from method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.areturn
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.areturn>
 	AReturn,
 
 	/// Get length of array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.arraylength
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.arraylength>
 	ArrayLength,
 
 	/// Store reference into local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.astore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.astore>
 	/// NOTE: we eagerly expand astore_{0,1,2,3} to this form.
 	AStore {
 		local_idx: u16,
 	},
 
 	/// Throw exception or error
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.athrow
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.athrow>
 	AThrow,
 
 	/// Load byte or boolean from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.baload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.baload>
 	BALoad,
 
 	/// Store into byte or boolean array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.bastore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.bastore>
 	BAStore,
 
 	/// Push byte
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.bipush
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.bipush>
 	BIPush(i8),
 
 	/// Load char from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.caload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.caload>
 	CALoad,
 
 	/// Store into char array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.castore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.castore>
 	CAStore,
 
 	/// Check whether object is of given type
@@ -437,178 +442,178 @@ pub enum Instruction {
 	},
 
 	/// Convert double to float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.d2f
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.d2f>
 	D2F,
 
 	/// Convert double to int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.d2i
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.d2i>
 	D2I,
 
 	/// Convert double to long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.d2l
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.d2l>
 	D2L,
 
 	/// Add double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dadd
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dadd>
 	DAdd,
 
 	/// Load double from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.daload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.daload>
 	DALoad,
 
 	/// Store into double array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dastore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dastore>
 	DAStore,
 
 	/// Compare double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dcmp_op
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dcmp_op>
 	DCmpL,
 	DCmpG,
 
 	/// Push double 0
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dconst_d
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dconst_d>
 	DConst0,
 	/// Push double 1
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dconst_d
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dconst_d>
 	DConst1,
 
 	/// Divide double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ddiv
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ddiv>
 	DDiv,
 
 	/// Load double from local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dload>
 	/// NOTE: we eagerly expand dload_{0,1,2,3} to this form.
 	DLoad {
 		local_idx: u16,
 	},
 
 	/// Multiply double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dmul
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dmul>
 	DMul,
 
 	/// Negate double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dneg
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dneg>
 	DNeg,
 
 	/// Remainder double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.drem
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.drem>
 	DRem,
 
 	/// Return double from method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dreturn
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dreturn>
 	DReturn,
 
 	/// Store double into local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dstore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dstore>
 	/// NOTE: we eagerly expand dstore_{0,1,2,3} to this form.
 	DStore {
 		local_idx: u16,
 	},
 
 	/// Subtract double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dsub
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dsub>
 	DSub,
 
 	/// Duplicate the top operand stack value
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup>
 	Dup,
 
 	/// Duplicate the top operand stack value and insert two values down
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup_x1
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup_x1>
 	DupX1,
 
 	/// Duplicate the top operand stack value and insert two or three values down
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup_x1
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup_x1>
 	DupX2,
 
 	/// Duplicate the top one or two operand stack values
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup2
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup2>
 	Dup2,
 
 	/// Duplicate the top one or two operand stack values and insert two or three values down
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup2_x1
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup2_x1>
 	Dup2X1,
 
 	/// Duplicate the top one or two operand stack values and insert two, three, or four values down
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup2_x2
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.dup2_x2>
 	Dup2X2,
 
 	/// Convert float to double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.f2d
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.f2d>
 	F2D,
 
 	/// Convert float to int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.f2i
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.f2i>
 	F2I,
 
 	/// Convert float to long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.f2l
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.f2l>
 	F2L,
 
 	/// Add float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fadd
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fadd>
 	FAdd,
 
 	/// Load float from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.faload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.faload>
 	FALoad,
 
 	/// Store into float array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fastore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fastore>
 	FAStore,
 
 	/// Compare float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fcmp_op
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fcmp_op>
 	FCmpL,
 	FCmpG,
 
 	/// Push float constant
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fconst_f
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fconst_f>
 	FConst0,
 	FConst1,
 	FConst2,
 
 	/// Divide float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fdiv
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fdiv>
 	FDiv,
 
 	/// Load float from local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fload>
 	/// NOTE: we eagerly expand fload_{0,1,2,3} to this form.
 	FLoad {
 		local_idx: u16,
 	},
 
 	/// Multiply float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fmul
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fmul>
 	FMul,
 
 	/// Negate float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fneg
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fneg>
 	FNeg,
 
 	/// Remainder float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.frem
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.frem>
 	FRem,
 
 	/// Return float from method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.freturn
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.freturn>
 	FReturn,
 
 	/// Store float into local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fstore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fstore>
 	/// NOTE: we eagerly expand fstore_{0,1,2,3} to this form.
 	FStore {
 		local_idx: u16,
 	},
 
 	/// Subtract float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fsub
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.fsub>
 	FSub,
 
 	/// Fetch field from object
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.getfield
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.getfield>
 	GetField {
 		class: String,
 		name: String,
@@ -616,7 +621,7 @@ pub enum Instruction {
 	},
 
 	/// Get static field from class
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.getstatic
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.getstatic>
 	GetStatic {
 		owner: String,
 		name: String,
@@ -624,70 +629,70 @@ pub enum Instruction {
 	},
 
 	/// Branch always
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto>
 	Goto {
 		target: LIRLabel,
 	},
 
 	/// Branch always (wide index)
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto_w
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto_w>
 	GotoW {
 		target: LIRLabel,
 	},
 
 	/// Convert int to byte
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2b
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2b>
 	I2B,
 
 	/// Convert int to char
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2c
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2c>
 	I2C,
 
 	/// Convert int to double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2d
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2d>
 	I2D,
 
 	/// Convert int to float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2f
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2f>
 	I2F,
 
 	/// Convert int to long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2l
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2l>
 	I2L,
 
 	/// Convert int to short
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2s
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2s>
 	I2S,
 
 	/// Add int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iadd
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iadd>
 	IAdd,
 
 	/// Load int from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iaload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iaload>
 	IALoad,
 
 	/// Bitwise AND int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iand
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iand>
 	IAnd,
 
 	/// Store into int array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iastore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iastore>
 	IAStore,
 
 	/// Push int constant
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iconst_i
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iconst_i>
 	/// NOTE: we expand the iconst_<i> forms eagerly
 	IConst {
 		val: i8, // -1..=5
 	},
 
 	/// Divide int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.idiv
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.idiv>
 	IDiv,
 
 	/// Branch if reference comparison succeeds
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_acmp_cond
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_acmp_cond>
 	IfACmpEq {
 		target: LIRLabel,
 	},
@@ -696,7 +701,7 @@ pub enum Instruction {
 	},
 
 	/// Branch if int comparison succeeds
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_icmp_cond
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_icmp_cond>
 	IfICmpEq {
 		target: LIRLabel,
 	},
@@ -717,7 +722,7 @@ pub enum Instruction {
 	},
 
 	/// Branch if int comparison with zero succeeds
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_cond
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_cond>
 	IfEq {
 		target: LIRLabel,
 	},
@@ -738,47 +743,47 @@ pub enum Instruction {
 	},
 
 	/// Branch if reference not null
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnonnull
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnonnull>
 	IfNonNull {
 		target: LIRLabel,
 	},
 
 	/// Branch if reference is null
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnull
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnull>
 	IfNull {
 		target: LIRLabel,
 	},
 
 	/// Increment local variable by constant
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iinc
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iinc>
 	IInc {
 		local_index: u16,
 		val: i16,
 	},
 
 	/// Load int from local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iload>
 	/// NOTE: we eagerly expand the iload_<N> forms
 	ILoad {
 		local_idx: u16,
 	},
 
 	/// Multiply int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.imul
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.imul>
 	IMul,
 
 	/// Negate int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ineg
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ineg>
 	INeg,
 
 	/// Determine if object is of given type
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.instanceof
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.instanceof>
 	InstanceOf {
 		class_type: String,
 	},
 
 	/// Invoke a dynamically-computed call site
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokedynamic
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokedynamic>
 	InvokeDynamic {
 		owner: String,
 		name: String,
@@ -788,7 +793,7 @@ pub enum Instruction {
 	},
 
 	/// Invoke interface method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokeinterface
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokeinterface>
 	InvokeInterface {
 		owner: String,
 		name: String,
@@ -797,7 +802,7 @@ pub enum Instruction {
 	},
 
 	/// Invoke instance method; direct invocation of instance initialization methods and methods of the current class and its supertypes
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokespecial
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokespecial>
 	InvokeSpecial {
 		owner: String,
 		name: String,
@@ -806,7 +811,7 @@ pub enum Instruction {
 	},
 
 	/// Invoke a class (static) method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokestatic
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokestatic>
 	InvokeStatic {
 		owner: String,
 		name: String,
@@ -815,7 +820,7 @@ pub enum Instruction {
 	},
 
 	/// Invoke instance method; dispatch based on class
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokevirtual
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokevirtual>
 	InvokeVirtual {
 		owner: String,
 		name: String,
@@ -823,207 +828,207 @@ pub enum Instruction {
 	},
 
 	/// Bitwise OR int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ior
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ior>
 	IOr,
 
 	/// Remainder int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.irem
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.irem>
 	IRem,
 
 	/// Return int from method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ireturn
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ireturn>
 	IReturn,
 
 	/// Shift left int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ishl
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ishl>
 	IShl,
 
 	/// Arithmetic shift right int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ishr
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ishr>
 	IShr,
 
 	/// Store int into local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.istore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.istore>
 	/// NOTE: we eagerly expand the istore_<N> forms
 	IStore {
 		local_idx: u16,
 	},
 
 	/// Subtract int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.isub
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.isub>
 	ISub,
 
 	/// Logical shift right int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iushr
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.iushr>
 	IUShr,
 
 	/// Bitwise XOR int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ixor
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ixor>
 	IXor,
 
 	/// Jump subroutine
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr>
 	Jsr {
 		target: LIRLabel,
 	},
 
 	/// Jump subroutine (wide index)
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr_w
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr_w>
 	JsrW {
 		target: LIRLabel,
 	},
 
 	/// Convert long to double
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.l2d
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.l2d>
 	LongToDouble,
 
 	/// Convert long to float
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.l2f
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.l2f>
 	LongToFloat,
 
 	/// Convert long to int
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.l2i
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.l2i>
 	LongToInt,
 
 	/// Add long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ladd
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ladd>
 	LAdd,
 
 	/// Load long from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.laload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.laload>
 	LALoad,
 
 	/// Bitwise AND long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.land
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.land>
 	LAnd,
 
 	/// Store into long array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lastore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lastore>
 	LAStore,
 
 	/// Compare long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lcmp
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lcmp>
 	LCmp,
 
 	/// Push long constant
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lconst_l
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lconst_l>
 	LConst {
 		value: i64, // 0..=1
 	},
 
 	/// Push item from run-time constant pool
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ldc
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ldc>
 	Ldc {
 		constant: LIRLDCConstant,
 	},
 
 	/// Divide long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ldiv
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ldiv>
 	LDiv,
 
 	/// Load long from local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lload>
 	/// NOTE: we eagerly expand the lload_<N> forms
 	LLoad {
 		local_idx: u8,
 	},
 
 	/// Multiply long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lmul
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lmul>
 	LMul,
 
 	/// Negate long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lneg
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lneg>
 	LNeg,
 
 	/// Access jump table by key match and jump
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lookupswitch
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lookupswitch>
 	LookupSwitch {
 		default_target: LIRLabel,
-		/// List of (match key, target_label)
+		/// List of (match key, target label)
 		pairs: Vec<(i32, LIRLabel)>,
 	},
 
 	/// Bitwise OR long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lor
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lor>
 	LOr,
 
 	/// Remainder long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lrem
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lrem>
 	LRem,
 
 	/// Return long from method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lreturn
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lreturn>
 	LReturn,
 
 	/// Shift left long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lshl
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lshl>
 	LShl,
 
 	/// Arithmetic shift right long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lshr
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lshr>
 	LShr,
 
 	/// Store long into local variable
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lstore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lstore>
 	/// NOTE: we eagerly expand the lstore_<N> forms
 	LStore {
 		local_idx: u16,
 	},
 
 	/// Subtract long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lsub
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lsub>
 	LSub,
 
 	/// Logical shift right long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lushr
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lushr>
 	LUShr,
 
 	/// Bitwise XOR long
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lxor
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lxor>
 	LXor,
 
 	/// Enter monitor for object
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.monitorenter
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.monitorenter>
 	MonitorEnter,
 
 	/// Exit monitor for object
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.monitorexit
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.monitorexit>
 	MonitorExit,
 
 	/// Create new multidimensional array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.multianewarray
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.multianewarray>
 	MultiANewArray {
 		element_ty: String,
 		dimensions: u8,
 	},
 
 	/// Create new object
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.new
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.new>
 	New {
 		object_ty: String,
 	},
 
 	/// Create new array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.newarray
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.newarray>
 	NewArray {
 		ty: ArrayType,
 	},
 
 	/// Do nothing
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.nop
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.nop>
 	Nop,
 
 	/// Pop the top operand stack value
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.pop
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.pop>
 	Pop,
 
 	/// Pop the top one or two operand stack values
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.nop2
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.nop2>
 	Pop2,
 
 	/// Set field in object
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.putfield
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.putfield>
 	PutField {
 		owner: String,
 		name: String,
@@ -1031,7 +1036,7 @@ pub enum Instruction {
 	},
 
 	/// Set static field in class
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.putstatic
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.putstatic>
 	PutStatic {
 		owner: String,
 		name: String,
@@ -1039,35 +1044,35 @@ pub enum Instruction {
 	},
 
 	/// Return from subroutine
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ret
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ret>
 	Ret {
 		local_idx: u16,
 	},
 
 	/// Return void from method
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.return
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.return>
 	Return,
 
 	/// Load short from array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.saload
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.saload>
 	SALoad,
 
 	/// Store into short array
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.sastore
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.sastore>
 	SAStore,
 
 	/// Push short
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.sipush
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.sipush>
 	SIPush {
 		val: i16,
 	},
 
 	/// Swap the top two operand stack values
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.swap
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.swap>
 	Swap,
 
 	/// Access jump table by index and jump
-	/// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.tableswitch
+	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.tableswitch>
 	TableSwitch {
 		default_target: LIRLabel,
 		low: i32,
@@ -1077,6 +1082,7 @@ pub enum Instruction {
 }
 
 impl Instruction {
+	#[must_use]
 	pub fn mnemonic(&self) -> &'static str {
 		match self {
 			Instruction::AConstNull => "ACONST_NULL",
@@ -1113,7 +1119,7 @@ impl Instruction {
 			false
 		};
 
-		let calc_jmp_target = |offset: i32| -> LIRLabel { LIRLabel::Unresolved((pc as i32).wrapping_add(offset)) };
+		let calc_jmp_target = |offset: i32| -> LIRLabel { LIRLabel::Unresolved(pc.cast_signed().wrapping_add(offset)) };
 		let inst = match opcode {
 			opcodes::AALOAD => Instruction::AALoad,
 			opcodes::AASTORE => Instruction::AAStore,
@@ -1198,7 +1204,7 @@ impl Instruction {
 			opcodes::DSUB => Instruction::DSub,
 			opcodes::DUP => Instruction::Dup,
 			opcodes::DUP_X1 => Instruction::DupX1,
-			opcodes::DUP_X2 => Instruction::Dup2,
+			opcodes::DUP_X2 => Instruction::DupX2,
 			opcodes::DUP2 => Instruction::Dup2,
 			opcodes::DUP2_X1 => Instruction::Dup2X1,
 			opcodes::DUP2_X2 => Instruction::Dup2X2,
@@ -1538,7 +1544,7 @@ impl Instruction {
 				};
 				let tag = cp.get_tag(index)?;
 				let constant = match tag {
-					CPTag::Integer(v) => LIRLDCConstant::Int(*v as i32),
+					CPTag::Integer(v) => LIRLDCConstant::Int(v.cast_signed()),
 					CPTag::Float(v) => LIRLDCConstant::Float(*v),
 					CPTag::String(StringTag { utf8_index }) => LIRLDCConstant::String(cp.get_utf8(*utf8_index)?),
 					CPTag::Class(ClassTag { name_index }) => LIRLDCConstant::Class(cp.get_utf8(*name_index)?),
@@ -1555,7 +1561,7 @@ impl Instruction {
 				let index = buffer.read_u16::<BigEndian>()?;
 				let tag = cp.get_tag(index)?;
 				let constant = match tag {
-					CPTag::Long(v) => LIRLDCConstant::Long(*v as i64),
+					CPTag::Long(v) => LIRLDCConstant::Long(v.cast_signed()),
 					CPTag::Double(v) => LIRLDCConstant::Double(*v),
 					_ => bail!("invalid tag for ldc2_w: {:?}", tag),
 				};
@@ -1580,18 +1586,19 @@ impl Instruction {
 				}
 
 				let default_offset = buffer.read_i32::<BigEndian>()?;
-				let default_target = LIRLabel::Unresolved((pc as i32).wrapping_add(default_offset));
+				let default_target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(default_offset));
 
 				let npairs = buffer.read_i32::<BigEndian>()?;
 				if npairs < 0 {
 					bail!("lookupswitch npairs must be >= 0");
 				}
 
+				#[allow(clippy::cast_sign_loss, reason = "checked above")]
 				let mut pairs = Vec::with_capacity(npairs as usize);
 				for _ in 0..npairs {
 					let match_key = buffer.read_i32::<BigEndian>()?;
 					let offset = buffer.read_i32::<BigEndian>()?;
-					let target = LIRLabel::Unresolved((pc as i32).wrapping_add(offset));
+					let target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(offset));
 					pairs.push((match_key, target));
 				}
 
@@ -1692,7 +1699,7 @@ impl Instruction {
 				}
 
 				let default_offset = buffer.read_i32::<BigEndian>()?;
-				let default_target = LIRLabel::Unresolved((pc as i32).wrapping_add(default_offset));
+				let default_target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(default_offset));
 
 				let low = buffer.read_i32::<BigEndian>()?;
 				let high = buffer.read_i32::<BigEndian>()?;
@@ -1701,15 +1708,14 @@ impl Instruction {
 					bail!("tableswitch low ({}) must be <= high ({})", low, high);
 				}
 
-				let count = (high as i64) - (low as i64) + 1;
-				if count > 65535 {
-					panic!("handle this case")
-				}
+				let count = i64::from(high) - i64::from(low) + 1;
+				assert!(count <= 65535, "handle this case");
 
+				#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked above")]
 				let mut targets = Vec::with_capacity(count as usize);
 				for _ in 0..count {
 					let offset = buffer.read_i32::<BigEndian>()?;
-					let target = LIRLabel::Unresolved((pc as i32).wrapping_add(offset));
+					let target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(offset));
 					targets.push(target);
 				}
 

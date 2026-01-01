@@ -39,7 +39,7 @@ impl LIRClass {
 		let class_attrs = raw
 			.attributes
 			.into_iter()
-			.map(|attr| LIRClassAttribute::parse(attr, &cp))
+			.map(|attr| LIRClassAttribute::parse(&attr, &cp))
 			.collect::<Result<Vec<_>>>()
 			.unwrap();
 		dbg!(&class_attrs);
@@ -54,7 +54,7 @@ impl LIRClass {
 				let attributes = fi
 					.attributes
 					.into_iter()
-					.map(|attr| LIRFieldAttribute::parse(attr, &cp))
+					.map(|attr| LIRFieldAttribute::parse(&attr, &cp))
 					.collect::<Result<Vec<_>>>()
 					.unwrap();
 				Ok(LIRField {
@@ -78,7 +78,7 @@ impl LIRClass {
 				let attributes = mi
 					.attributes
 					.into_iter()
-					.map(|attr| LIRMethodAttribute::parse(attr, &cp, &class_attrs))
+					.map(|attr| LIRMethodAttribute::parse(&attr, &cp, &class_attrs))
 					.collect::<Result<Vec<_>>>()
 					.unwrap();
 				Ok(LIRMethod {
@@ -92,9 +92,22 @@ impl LIRClass {
 		dbg!(&methods);
 
 		// FIXME: visit all attributes to validate
+		// some attributes hold attributes themselves, we don't validate those currently
 		for attr in class_attrs.iter() {
 			if let LIRClassAttribute::Unknown(val) = attr {
 				panic!("unknown attribute `{}` in class `{}`", val, this_class)
+			}
+		}
+
+		for attr in fields.iter().flat_map(|f| &f.attributes) {
+			if let LIRFieldAttribute::Unknown(val) = attr {
+				panic!("unknown attribute `{}` in field `{}`", val, this_class)
+			}
+		}
+
+		for attr in methods.iter().flat_map(|m| &m.attributes) {
+			if let LIRMethodAttribute::Unknown(val) = attr {
+				panic!("unknown attribute `{}` in method `{}`", val, this_class)
 			}
 		}
 
@@ -123,7 +136,7 @@ mod tests {
 	fn parse_hello_world() -> eyre::Result<()> {
 		let hello_world_class = include_bytes!("../../../test_data/hello_world/HelloWorld.class");
 		let mut cursor = Cursor::new(hello_world_class);
-		let cf = ClassFile::read(&mut cursor).unwrap();
+		let cf = ClassFile::read(&mut cursor)?;
 		let lir_cf = LIRClass::parse(cf);
 		println!("{lir_cf:#?}");
 		Ok(())
@@ -131,79 +144,79 @@ mod tests {
 
 	#[test]
 	fn parse_enterprise_hello_world() -> eyre::Result<()> {
-		println!("{}", std::env::current_dir().unwrap().display());
-		for entry in fs::read_dir("../../test_data/enterprise_hello_world/").unwrap() {
-			let entry = entry.unwrap();
+		println!("{}", std::env::current_dir()?.display());
+		for entry in fs::read_dir("../../test_data/enterprise_hello_world/")? {
+			let entry = entry?;
 			let path = entry.path();
 			if path.is_file() && path.extension().unwrap() == "class" {
-				let hello_world_class = fs::read(path).unwrap();
+				let hello_world_class = fs::read(path)?;
 				let mut cursor = Cursor::new(hello_world_class);
-				let cf = ClassFile::read(&mut cursor).unwrap();
+				let cf = ClassFile::read(&mut cursor)?;
 				let lir_cf = LIRClass::parse(cf);
 				println!("{lir_cf:#?}");
-			};
+			}
 		}
 		Ok(())
 	}
 
 	#[test]
 	fn parse_annos() -> eyre::Result<()> {
-		println!("{}", std::env::current_dir().unwrap().display());
-		for entry in fs::read_dir("../../test_data/hello_world2/").unwrap() {
-			let entry = entry.unwrap();
+		println!("{}", std::env::current_dir()?.display());
+		for entry in fs::read_dir("../../test_data/hello_world2/")? {
+			let entry = entry?;
 			let path = entry.path();
 			if path.is_file() && path.extension().unwrap() == "class" {
-				let hello_world_class = fs::read(path).unwrap();
+				let hello_world_class = fs::read(path)?;
 				let mut cursor = Cursor::new(hello_world_class);
-				let cf = ClassFile::read(&mut cursor).unwrap();
+				let cf = ClassFile::read(&mut cursor)?;
 				let lir_cf = LIRClass::parse(cf);
 				println!("{lir_cf:#?}");
-			};
+			}
 		}
 		Ok(())
 	}
 
 	#[test]
 	fn parse_module() -> eyre::Result<()> {
-		println!("{}", std::env::current_dir().unwrap().display());
-		for entry in fs::read_dir("../../test_data/modules/out/test.module").unwrap() {
-			let entry = entry.unwrap();
+		println!("{}", std::env::current_dir()?.display());
+		for entry in fs::read_dir("../../test_data/modules/out/test.module")? {
+			let entry = entry?;
 			let path = entry.path();
 			if path.is_file() && path.extension().unwrap() == "class" {
-				let hello_world_class = fs::read(path).unwrap();
+				let hello_world_class = fs::read(path)?;
 				let mut cursor = Cursor::new(hello_world_class);
-				let cf = ClassFile::read(&mut cursor).unwrap();
+				let cf = ClassFile::read(&mut cursor)?;
 				let lir_cf = LIRClass::parse(cf);
 				println!("{lir_cf:#?}");
-			};
+			}
 		}
-		for entry in fs::read_dir("../../test_data/modules/out/test.module/test").unwrap() {
-			let entry = entry.unwrap();
+		for entry in fs::read_dir("../../test_data/modules/out/test.module/test")? {
+			let entry = entry?;
 			let path = entry.path();
 			if path.is_file() && path.extension().unwrap() == "class" {
-				let hello_world_class = fs::read(path).unwrap();
+				let hello_world_class = fs::read(path)?;
 				let mut cursor = Cursor::new(hello_world_class);
-				let cf = ClassFile::read(&mut cursor).unwrap();
+				let cf = ClassFile::read(&mut cursor)?;
 				let lir_cf = LIRClass::parse(cf);
 				println!("{lir_cf:#?}");
-			};
+			}
 		}
 		Ok(())
 	}
 
 	#[test]
 	fn parse_indy() -> eyre::Result<()> {
-		println!("{}", std::env::current_dir().unwrap().display());
-		for entry in fs::read_dir("../../test_data/indy").unwrap() {
-			let entry = entry.unwrap();
+		println!("{}", std::env::current_dir()?.display());
+		for entry in fs::read_dir("../../test_data/indy")? {
+			let entry = entry?;
 			let path = entry.path();
 			if path.is_file() && path.extension().unwrap() == "class" {
-				let hello_world_class = fs::read(path).unwrap();
+				let hello_world_class = fs::read(path)?;
 				let mut cursor = Cursor::new(hello_world_class);
-				let cf = ClassFile::read(&mut cursor).unwrap();
+				let cf = ClassFile::read(&mut cursor)?;
 				let lir_cf = LIRClass::parse(cf);
 				println!("{lir_cf:#?}");
-			};
+			}
 		}
 		Ok(())
 	}

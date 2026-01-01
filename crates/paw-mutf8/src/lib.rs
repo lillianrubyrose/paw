@@ -1,8 +1,10 @@
 //! Fast and simple MUTF-8 encoder/decoder.
 //!
-//! https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.7
+//! <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.7>
 
 use std::borrow::Cow;
+
+use num_conv::Truncate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Mutf8DecodeError {
@@ -30,7 +32,7 @@ fn encoded_len(s: &str) -> usize {
 }
 
 /// Encodes a Rust string to the MUTF-8 format.
-pub fn encode<'a, S: AsRef<str> + ?Sized>(input: &'a S) -> Cow<'a, [u8]> {
+pub fn encode<S: AsRef<str> + ?Sized>(input: &S) -> Cow<'_, [u8]> {
 	let input = input.as_ref();
 
 	let encoded_len = encoded_len(input);
@@ -69,15 +71,15 @@ fn encode_slow(input: &[u8], capacity: usize) -> Cow<'_, [u8]> {
 			let b3 = unsafe { *input.get_unchecked(i + 2) };
 			let b4 = unsafe { *input.get_unchecked(i + 3) };
 
-			let codepoint = ((b1 as u32 & 0x07) << 18)
-				| ((b2 as u32 & 0x3F) << 12)
-				| ((b3 as u32 & 0x3F) << 6)
-				| (b4 as u32 & 0x3F);
+			let codepoint = ((u32::from(b1) & 0x07) << 18)
+				| ((u32::from(b2) & 0x3F) << 12)
+				| ((u32::from(b3) & 0x3F) << 6)
+				| (u32::from(b4) & 0x3F);
 
 			// UTF-16 surrogate pair
 			let offset = codepoint - 0x10000;
-			let high = 0xD800 | ((offset >> 10) as u16);
-			let low = 0xDC00 | ((offset & 0x3FF) as u16);
+			let high = 0xD800 | ((offset >> 10).truncate::<u16>());
+			let low = 0xDC00 | ((offset & 0x3FF).truncate::<u16>());
 
 			output.push(0xE0 | ((high >> 12) as u8));
 			output.push(0x80 | (((high >> 6) & 0x3F) as u8));
@@ -155,7 +157,7 @@ fn decode_slow(input: &[u8]) -> Result<String, Mutf8DecodeError> {
 			let b3 = unsafe { *input.get_unchecked(i + 1) };
 			i += 2;
 
-			if b1 == 0xED && b2 >= 0xA0 && b2 <= 0xAF {
+			if b1 == 0xED && (0xA0..=0xAF).contains(&b2) {
 				// A low surrogate should follow a high surrogate
 				if i + 2 >= len {
 					return Err(Mutf8DecodeError::UnexpectedEnd);
@@ -168,16 +170,16 @@ fn decode_slow(input: &[u8]) -> Result<String, Mutf8DecodeError> {
 				i += 3;
 
 				// Low surrgate should be 0xED or 0xB0..0xBF
-				if b4 != 0xED || b5 < 0xB0 || b5 > 0xBF {
+				if b4 != 0xED || !(0xB0..=0xBF).contains(&b5) {
 					return Err(Mutf8DecodeError::InvalidSurrogate);
 				}
 
-				let high = ((b1 as u32 & 0x0F) << 12) | ((b2 as u32 & 0x3F) << 6) | (b3 as u32 & 0x3F);
-				let low = ((b4 as u32 & 0x0F) << 12) | ((b5 as u32 & 0x3F) << 6) | (b6 as u32 & 0x3F);
+				let high = ((u32::from(b1) & 0x0F) << 12) | ((u32::from(b2) & 0x3F) << 6) | (u32::from(b3) & 0x3F);
+				let low = ((u32::from(b4) & 0x0F) << 12) | ((u32::from(b5) & 0x3F) << 6) | (u32::from(b6) & 0x3F);
 
 				let codepoint = 0x10000 + (((high & 0x3FF) << 10) | (low & 0x3FF));
 
-				out_vec.push(0xF0 | ((codepoint >> 18) as u8));
+				out_vec.push(0xF0 | ((codepoint >> 18).truncate::<u8>()));
 				out_vec.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
 				out_vec.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
 				out_vec.push(0x80 | ((codepoint & 0x3F) as u8));

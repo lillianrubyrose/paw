@@ -34,7 +34,7 @@ fn process_path(path: impl AsRef<Path>) -> Result<()> {
 		eprintln!("skipping non-file path `{}`", path.display());
 		return Ok(());
 	}
-	if !path.extension().is_some_and(|ext| ext == "class") {
+	if path.extension().is_none_or(|ext| ext != "class") {
 		eprintln!("skipping non-class file `{}`", path.display());
 		return Ok(());
 	}
@@ -44,7 +44,7 @@ fn process_path(path: impl AsRef<Path>) -> Result<()> {
 
 fn process_class(data: &[u8]) -> Result<()> {
 	let mut cursor = Cursor::new(data);
-	let cf = ClassFile::read(&mut cursor).unwrap();
+	let cf = ClassFile::read(&mut cursor)?;
 	let lir_cf = LIRClass::parse(cf);
 	println!("{lir_cf:#?}");
 	Ok(())

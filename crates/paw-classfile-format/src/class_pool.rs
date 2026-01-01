@@ -29,8 +29,14 @@ pub enum ConstantPoolIndexErr {
 }
 
 impl ConstantPool {
+	#[must_use]
 	pub fn len(&self) -> usize {
 		self.tags.len()
+	}
+
+	#[must_use]
+	pub fn is_empty(&self) -> bool {
+		self.len() == 0
 	}
 
 	pub fn get_tag(&self, idx: ConstantPoolIndex) -> Result<&CPTag, ConstantPoolIndexErr> {
@@ -266,7 +272,7 @@ impl ConstantPool {
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
 		let len = self.tags.len();
-		debug_assert!(len <= u16::MAX as usize, "class has too many constants");
+		debug_assert!(u16::try_from(len).is_ok(), "class has too many constants");
 		buffer.write_u16::<BigEndian>(len.truncate())?;
 		for tag in self.tags.iter() {
 			tag.write(buffer)?;
@@ -322,20 +328,20 @@ pub struct NameAndTypeTag {
 }
 
 #[derive(Debug, Clone)]
-/// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.8
+/// <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.8>
 pub struct MethodHandleTag {
 	pub reference_kind: u8,   // FIXME: types?
 	pub reference_index: u16, // FIXME: what does this point to
 }
 
 #[derive(Debug, Clone)]
-/// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.9
+/// <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.9>
 pub struct MethodTypeTag {
 	pub descriptor_index: u16, // StringTag
 }
 
 #[derive(Debug, Clone)]
-/// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.10
+/// <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.10>
 pub struct InvokeDynamicTag {
 	pub bootstrap_method_attr_index: u16,
 	pub name_and_ty_index: u16, // NameAndTypeTag
@@ -378,6 +384,7 @@ pub enum CPTag {
 }
 
 impl CPTag {
+	#[must_use]
 	pub const fn name(&self) -> &'static str {
 		match self {
 			CPTag::Utf8(_) => "Utf8",
@@ -456,6 +463,7 @@ impl CPTag {
 		}
 	}
 
+	#[must_use]
 	pub fn id(&self) -> u8 {
 		// SAFETY: IOCpTag is repr(C, u8), therefore the byte at offset 0 of the struct is the discriminant
 		unsafe { core::ptr::from_ref(self).cast::<u8>().read() }
@@ -478,18 +486,12 @@ impl CPTag {
 			CPTag::FieldRef(FieldRefTag {
 				class_index,
 				name_and_ty_index,
-			}) => {
-				buffer.write_u16::<BigEndian>(*class_index)?;
-				buffer.write_u16::<BigEndian>(*name_and_ty_index)?;
-			}
-			CPTag::MethodRef(MethodRefTag {
+			})
+			| CPTag::MethodRef(MethodRefTag {
 				class_index,
 				name_and_ty_index,
-			}) => {
-				buffer.write_u16::<BigEndian>(*class_index)?;
-				buffer.write_u16::<BigEndian>(*name_and_ty_index)?;
-			}
-			CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
+			})
+			| CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
 				class_index,
 				name_and_ty_index,
 			}) => {
@@ -520,10 +522,7 @@ impl CPTag {
 				buffer.write_u16::<BigEndian>(*bootstrap_method_attr_index)?;
 				buffer.write_u16::<BigEndian>(*name_and_type_index)?;
 			}
-			CPTag::Module(ModuleTag { name_index }) => {
-				buffer.write_u16::<BigEndian>(*name_index)?;
-			}
-			CPTag::Package(PackageTag { name_index }) => {
+			CPTag::Module(ModuleTag { name_index }) | CPTag::Package(PackageTag { name_index }) => {
 				buffer.write_u16::<BigEndian>(*name_index)?;
 			}
 		}
