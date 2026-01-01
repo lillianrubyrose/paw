@@ -42,7 +42,6 @@ impl LIRClass {
 			.map(|attr| LIRClassAttribute::parse(&attr, &cp))
 			.collect::<Result<Vec<_>>>()
 			.unwrap();
-		dbg!(&class_attrs);
 
 		let fields = raw
 			.fields
@@ -65,7 +64,6 @@ impl LIRClass {
 				})
 			})
 			.collect::<Result<Vec<LIRField>>>()?;
-		dbg!(&fields);
 
 		let methods = raw
 			.methods
@@ -74,7 +72,6 @@ impl LIRClass {
 				let access_flags = mi.access_flags;
 				let name = cp.get_utf8(mi.name_index)?;
 				let descriptor = cp.get_utf8(mi.descriptor_index)?.parse()?;
-				dbg!(&descriptor);
 				let attributes = mi
 					.attributes
 					.into_iter()
@@ -89,7 +86,6 @@ impl LIRClass {
 				})
 			})
 			.collect::<Result<Vec<LIRMethod>>>()?;
-		dbg!(&methods);
 
 		// FIXME: visit all attributes to validate
 		// some attributes hold attributes themselves, we don't validate those currently

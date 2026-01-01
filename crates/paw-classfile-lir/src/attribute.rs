@@ -43,7 +43,6 @@ pub enum LIRClassAttribute {
 impl LIRClassAttribute {
 	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
-		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
@@ -110,7 +109,6 @@ pub enum LIRFieldAttribute {
 impl LIRFieldAttribute {
 	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
-		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
@@ -165,7 +163,6 @@ pub enum LIRMethodAttribute {
 impl LIRMethodAttribute {
 	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool, class_attrs: &[LIRClassAttribute]) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
-		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
@@ -226,7 +223,6 @@ pub enum LIRCodeAttribute {
 impl LIRCodeAttribute {
 	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
-		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
@@ -271,7 +267,6 @@ pub enum LIRRecordComponentAttribute {
 impl LIRRecordComponentAttribute {
 	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
-		eprintln!("parsing attr {}", name);
 
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
@@ -479,8 +474,6 @@ impl CodeAttribute {
 				labels.push(LIRLabel::Resolved(*resolved_label));
 			}
 		}
-
-		println!("{:#?}", code);
 
 		Ok(CodeAttribute {
 			max_stack,

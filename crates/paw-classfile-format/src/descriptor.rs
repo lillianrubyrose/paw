@@ -142,6 +142,7 @@ impl MethodDescriptor {
 		for a in self.args.iter() {
 			let _ = write!(&mut s, "{}", a.jvm_repr());
 		}
+		s.push(')');
 		match &self.ret {
 			Some(ret) => {
 				let _ = write!(&mut s, "{}", ret.jvm_repr());
