@@ -328,6 +328,7 @@ dependencies = [
  "byteorder",
  "color-eyre",
  "eyre",
+ "num-conv",
  "paw_classfile_format",
  "paw_mutf8",
  "thiserror",

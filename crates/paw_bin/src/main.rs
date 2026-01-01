@@ -79,8 +79,8 @@ fn validate_file(path: &Path) {
 	if path.extension().is_some_and(|e| e == "class") {
 		print!("Validating {}", path.display());
 		match parse_lir(path) {
-			Ok(_) => println!("OK"),
-			Err(e) => println!("FAIL\nError: {e}"),
+			Ok(_) => println!(" OK"),
+			Err(e) => println!(" FAIL\nError: {e}"),
 		}
 	}
 }
@@ -88,12 +88,12 @@ fn validate_file(path: &Path) {
 fn read_format(path: &Path) -> Result<ClassFile> {
 	let data = fs::read(path).wrap_err_with(|| format!("Failed to read {}", path.display()))?;
 	let mut data = Cursor::new(data);
-	ClassFile::read(&mut data).wrap_err("Failed to parse raw ClassFile")
+	ClassFile::read(&mut data)
 }
 
 fn parse_lir(path: &Path) -> Result<LIRClass> {
 	let cf = read_format(path)?;
-	LIRClass::parse(cf).wrap_err("Failed to parse LIRClass")
+	LIRClass::parse(cf)
 }
 
 fn dump_class_path(path: &Path) -> Result<()> {

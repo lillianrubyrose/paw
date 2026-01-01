@@ -86,7 +86,7 @@ impl ClassFile {
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
 		buffer.write_u32::<BigEndian>(CLASSFILE_MAGIC)?;
 		buffer.write_u16::<BigEndian>(self.version.minor)?;
-		buffer.write_u16::<BigEndian>(self.version.minor)?;
+		buffer.write_u16::<BigEndian>(self.version.major)?;
 
 		self.cp.write(buffer)?;
 

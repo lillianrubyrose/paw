@@ -30,6 +30,11 @@ pub enum ConstantPoolIndexErr {
 
 impl ConstantPool {
 	#[must_use]
+	pub const fn new() -> Self {
+		Self { tags: Vec::new() }
+	}
+
+	#[must_use]
 	pub fn len(&self) -> usize {
 		self.tags.len()
 	}
@@ -260,21 +265,234 @@ impl ConstantPool {
 		let name = self.get_utf8(tag.name_index)?;
 		Ok(name)
 	}
+
+	pub fn push(&mut self, tag: CPTag) -> u16 {
+		self.tags.push(tag);
+		self.len().truncate()
+	}
+
+	pub fn add_utf8(&mut self, val: String) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::Utf8(t) if t.value == val))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Utf8(Utf8Tag { value: val }))
+	}
+
+	pub fn add_class(&mut self, name: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::Class(t) if t.name_index == name_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Class(ClassTag { name_index }))
+	}
+
+	pub fn add_string(&mut self, val: String) -> u16 {
+		let utf8_index = self.add_utf8(val);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::String(t) if t.utf8_index == utf8_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::String(StringTag { utf8_index }))
+	}
+
+	pub fn add_integer(&mut self, val: u32) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::Integer(v) if *v == val))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Integer(val))
+	}
+
+	pub fn add_float(&mut self, val: f32) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::Float(v) if v.eq(&val)))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Float(val))
+	}
+
+	pub fn add_long(&mut self, val: u64) -> u16 {
+		if let Some(idx) = self.tags.iter().position(|t| matches!(t, CPTag::Long(v) if *v == val)) {
+			return (idx + 1).truncate();
+		}
+		let idx = self.push(CPTag::Long(val));
+		self.push(CPTag::Unusable);
+		idx
+	}
+
+	pub fn add_double(&mut self, val: f64) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::Double(v) if v.eq(&val)))
+		{
+			return (idx + 1).truncate();
+		}
+		let idx = self.push(CPTag::Double(val));
+		self.push(CPTag::Unusable);
+		idx
+	}
+
+	pub fn add_name_and_type(&mut self, name: String, descriptor: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		let descriptor_index = self.add_utf8(descriptor);
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPTag::NameAndType(t) if t.name_index == name_index && t.descriptor_index == descriptor_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::NameAndType(NameAndTypeTag {
+			name_index,
+			descriptor_index,
+		}))
+	}
+
+	pub fn add_field_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+		let class_index = self.add_class(class);
+		let name_and_ty_index = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPTag::FieldRef(t) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::FieldRef(FieldRefTag {
+			class_index,
+			name_and_ty_index,
+		}))
+	}
+
+	pub fn add_method_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+		let class_index = self.add_class(class);
+		let name_and_ty_index = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPTag::MethodRef(t) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::MethodRef(MethodRefTag {
+			class_index,
+			name_and_ty_index,
+		}))
+	}
+
+	pub fn add_interface_method_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+		let class_index = self.add_class(class);
+		let name_and_ty_index = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(|t| matches!(t, CPTag::InterfaceMethodRef(t) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index)) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
+			class_index,
+			name_and_ty_index,
+		}))
+	}
+
+	pub fn add_method_handle(&mut self, kind: u8, reference_index: u16) -> u16 {
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPTag::MethodHandle(t) if t.reference_kind == kind && t.reference_index == reference_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::MethodHandle(MethodHandleTag {
+			reference_kind: kind,
+			reference_index,
+		}))
+	}
+
+	pub fn add_method_type(&mut self, descriptor: String) -> u16 {
+		let descriptor_index = self.add_utf8(descriptor);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::MethodType(t) if t.descriptor_index == descriptor_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::MethodType(MethodTypeTag { descriptor_index }))
+	}
+
+	pub fn add_module(&mut self, name: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::Module(t) if t.name_index == name_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Module(ModuleTag { name_index }))
+	}
+
+	pub fn add_package(&mut self, name: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPTag::Package(t) if t.name_index == name_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Package(PackageTag { name_index }))
+	}
+}
+
+impl Default for ConstantPool {
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 // Read/Write
 impl ConstantPool {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
-		let cp_count = usize::from(buffer.read_u16::<BigEndian>()? - 1);
-		let tags = buffer.read_vec_with(cp_count, |b| CPTag::read(b))?;
+		let cp_count = buffer.read_u16::<BigEndian>()?;
+		if cp_count == 0 {
+			return Ok(Self::new());
+		}
+
+		let mut tags = Vec::with_capacity((cp_count - 1) as usize);
+		let mut i = 1;
+		while i < cp_count {
+			let tag = CPTag::read(buffer)?;
+			let is_wide = matches!(tag, CPTag::Long(_) | CPTag::Double(_));
+			tags.push(tag);
+			i += 1;
+
+			if is_wide {
+				tags.push(CPTag::Unusable);
+				i += 1;
+			}
+		}
+
 		Ok(Self { tags })
 	}
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		let len = self.tags.len();
+		let len = self.tags.len() + 1;
 		debug_assert!(u16::try_from(len).is_ok(), "class has too many constants");
 		buffer.write_u16::<BigEndian>(len.truncate())?;
 		for tag in self.tags.iter() {
+			if let CPTag::Unusable = tag {
+				continue;
+			}
+
 			tag.write(buffer)?;
 		}
 		Ok(())
@@ -360,6 +578,7 @@ pub struct PackageTag {
 #[derive(Debug, Clone)]
 #[repr(C, u8)]
 pub enum CPTag {
+	Unusable = 0,
 	Utf8(Utf8Tag) = 1,
 	Integer(u32) = 3,
 	Float(f32) = 4,
@@ -387,6 +606,7 @@ impl CPTag {
 	#[must_use]
 	pub const fn name(&self) -> &'static str {
 		match self {
+			CPTag::Unusable => "Unusable",
 			CPTag::Utf8(_) => "Utf8",
 			CPTag::Integer(_) => "Integer",
 			CPTag::Float(_) => "Float",
@@ -472,6 +692,7 @@ impl CPTag {
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
 		buffer.write_u8(self.id())?;
 		match self {
+			CPTag::Unusable => unreachable!("Unusable tag should not be written"),
 			CPTag::Utf8(Utf8Tag { value }) => {
 				let bytes = paw_mutf8::encode(value);
 				buffer.write_u16::<BigEndian>(bytes.len().truncate::<u16>())?;

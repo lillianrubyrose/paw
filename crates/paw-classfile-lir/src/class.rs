@@ -1,5 +1,7 @@
 use eyre::Result;
-use paw_classfile_format::{ClassAccessFlags, ClassFile, ClassFileVersion};
+use paw_classfile_format::{
+	ClassAccessFlags, ClassFile, ClassFileVersion, FieldInfo, MethodInfo, class_pool::ConstantPool,
+};
 
 use crate::{
 	attribute::{LIRClassAttribute, LIRFieldAttribute, LIRMethodAttribute},
@@ -118,6 +120,75 @@ impl LIRClass {
 			attributes: class_attrs,
 		})
 	}
+
+	pub fn to_class_file(&self) -> Result<ClassFile> {
+		let mut cp = ConstantPool::new();
+
+		let this_class = cp.add_class(self.this_class.clone());
+		let super_class = self.super_class.as_ref().map_or(0, |s| cp.add_class(s.clone()));
+		let interfaces = self.interfaces.iter().map(|i| cp.add_class(i.clone())).collect();
+
+		let attributes = self
+			.attributes
+			.iter()
+			.map(|a| a.write(&mut cp))
+			.collect::<Result<Vec<_>>>()?;
+
+		let fields = self
+			.fields
+			.iter()
+			.map(|f| {
+				let name_index = cp.add_utf8(f.name.clone());
+				let descriptor_index = cp.add_utf8(f.descriptor.jvm_repr());
+				let attributes = f
+					.attributes
+					.iter()
+					.map(|a| a.write(&mut cp))
+					.collect::<Result<Vec<_>>>()?;
+				Ok(FieldInfo {
+					access_flags: f.access_flags,
+					name_index,
+					descriptor_index,
+					attributes,
+				})
+			})
+			.collect::<Result<Vec<_>>>()?;
+
+		let methods = self
+			.methods
+			.iter()
+			.map(|m| {
+				let name_index = cp.add_utf8(m.name.clone());
+				let descriptor_index = cp.add_utf8(m.descriptor.jvm_repr());
+				let attributes = m
+					.attributes
+					.iter()
+					.map(|a| a.write(&mut cp))
+					.collect::<Result<Vec<_>>>()?;
+				Ok(MethodInfo {
+					access_flags: m.access_flags,
+					name_index,
+					descriptor_index,
+					attributes,
+				})
+			})
+			.collect::<Result<Vec<_>>>()?;
+
+		Ok(ClassFile {
+			version: ClassFileVersion {
+				major: self.version.major,
+				minor: self.version.minor,
+			},
+			cp,
+			access_flags: self.access_flags,
+			this_class,
+			super_class,
+			interfaces,
+			fields,
+			methods,
+			attributes,
+		})
+	}
 }
 
 #[cfg(test)]
@@ -135,6 +206,22 @@ mod tests {
 		let cf = ClassFile::read(&mut cursor)?;
 		let lir_cf = LIRClass::parse(cf);
 		println!("{lir_cf:#?}");
+		Ok(())
+	}
+
+	#[test]
+	fn write_hello_world() -> eyre::Result<()> {
+		let hello_world_class = include_bytes!("../../../test_data/hello_world/HelloWorld.class");
+		let mut cursor = Cursor::new(hello_world_class);
+		let cf = ClassFile::read(&mut cursor)?;
+		let lir_cf = LIRClass::parse(cf)?;
+
+		let cf = lir_cf.to_class_file()?;
+		let mut cursor = Cursor::new(Vec::new());
+		cf.write(&mut cursor)?;
+
+		std::fs::write("HelloWorld.paw.class", cursor.into_inner())?;
+
 		Ok(())
 	}
 

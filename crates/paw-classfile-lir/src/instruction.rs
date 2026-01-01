@@ -1,7 +1,8 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
-use byteorder::BigEndian;
+use byteorder::{BigEndian, WriteBytesExt};
 use eyre::{OptionExt, Result, bail, eyre};
+use num_conv::Truncate;
 use paw_classfile_format::{
 	CPTag,
 	class_pool::{ClassTag, ConstantPool, InterfaceMethodRefTag, MethodRefTag, MethodTypeTag, StringTag},
@@ -11,7 +12,7 @@ use paw_classfile_format::{
 
 use crate::{
 	attribute::{BootstrapMethodArgument, LIRClassAttribute},
-	method::LIRMethodHandle,
+	method::{LIRHandleDescriptor, LIRMethodHandle},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -25,6 +26,14 @@ pub enum ArrayType {
 	Short = 9,
 	Int = 10,
 	Long = 11,
+}
+
+impl ArrayType {
+	#[must_use]
+	pub fn id(&self) -> u8 {
+		// SAFETY: ArrayType is repr(C, u8), therefore the byte at offset 0 of the struct is the discriminant
+		unsafe { core::ptr::from_ref(self).cast::<u8>().read() }
+	}
 }
 
 impl TryFrom<u8> for ArrayType {
@@ -316,7 +325,7 @@ pub mod opcodes {
 	pub const WIDE: u8 = 0xC4;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(unused, reason = "writing not implemented yet")]
 pub struct LIRResolvedLabel(/* private */ u32);
 
@@ -930,7 +939,7 @@ pub enum Instruction {
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lload>
 	/// NOTE: we eagerly expand the lload_<N> forms
 	LLoad {
-		local_idx: u8,
+		local_idx: u16,
 	},
 
 	/// Multiply long
@@ -1569,7 +1578,11 @@ impl Instruction {
 			}
 			opcodes::LDIV => Instruction::LDiv,
 			opcodes::LLOAD => Instruction::LLoad {
-				local_idx: buffer.read_u8()?,
+				local_idx: if is_wide {
+					buffer.read_u16::<BigEndian>()?
+				} else {
+					u16::from(buffer.read_u8()?)
+				},
 			},
 			opcodes::LLOAD_0 => Instruction::LLoad { local_idx: 0 },
 			opcodes::LLOAD_1 => Instruction::LLoad { local_idx: 1 },
@@ -1729,5 +1742,653 @@ impl Instruction {
 			opcode => bail!("Unrecognized opcode: {} : 0x{:X}", opcode, opcode),
 		};
 		Ok(inst)
+	}
+
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		buffer: &mut W,
+		cp: &mut ConstantPool,
+		pc: u32,
+		label_map: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
+		let calc_jmp_offset = |target: &LIRLabel| -> Result<i32> {
+			let target_pc = match target {
+				LIRLabel::Resolved(l) => *label_map
+					.get(l)
+					.ok_or_else(|| eyre!("Unresolved label {:?} at pc {}", l, pc))?,
+				LIRLabel::Unresolved(p) => p.cast_unsigned(),
+			};
+			Ok(target_pc.cast_signed().wrapping_sub(pc.cast_signed()))
+		};
+		let mut opcode = |op: u8| buffer.write_u8(op);
+
+		match self {
+			Instruction::AALoad => opcode(opcodes::AALOAD)?,
+			Instruction::AAStore => opcode(opcodes::AASTORE)?,
+			Instruction::AConstNull => opcode(opcodes::ACONST_NULL)?,
+			Instruction::ALoad { local_idx } => match local_idx {
+				0 => opcode(opcodes::ALOAD_0)?,
+				1 => opcode(opcodes::ALOAD_1)?,
+				2 => opcode(opcodes::ALOAD_2)?,
+				3 => opcode(opcodes::ALOAD_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::ALOAD)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::ALOAD)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::ANewArray { element_ty } => {
+				let element_idx = cp.add_class(element_ty.clone());
+				opcode(opcodes::ANEWARRAY)?;
+				buffer.write_u16::<BigEndian>(element_idx)?;
+			}
+			Instruction::AReturn => opcode(opcodes::ARETURN)?,
+			Instruction::ArrayLength => opcode(opcodes::ARRAYLENGTH)?,
+			Instruction::AStore { local_idx } => match local_idx {
+				0 => opcode(opcodes::ASTORE_0)?,
+				1 => opcode(opcodes::ASTORE_1)?,
+				2 => opcode(opcodes::ASTORE_2)?,
+				3 => opcode(opcodes::ASTORE_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::ASTORE)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::ASTORE)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::AThrow => opcode(opcodes::ATHROW)?,
+			Instruction::BALoad => opcode(opcodes::BALOAD)?,
+			Instruction::BAStore => opcode(opcodes::BASTORE)?,
+			Instruction::BIPush(v) => {
+				opcode(opcodes::BIPUSH)?;
+				buffer.write_i8(*v)?;
+			}
+			Instruction::CALoad => opcode(opcodes::CALOAD)?,
+			Instruction::CAStore => opcode(opcodes::CASTORE)?,
+			Instruction::CheckCast { object_ty } => {
+				let element_idx = cp.add_class(object_ty.clone());
+				opcode(opcodes::CHECKCAST)?;
+				buffer.write_u16::<BigEndian>(element_idx)?;
+			}
+			Instruction::D2F => opcode(opcodes::D2F)?,
+			Instruction::D2I => opcode(opcodes::D2I)?,
+			Instruction::D2L => opcode(opcodes::D2L)?,
+			Instruction::DAdd => opcode(opcodes::DADD)?,
+			Instruction::DALoad => opcode(opcodes::DALOAD)?,
+			Instruction::DAStore => opcode(opcodes::DASTORE)?,
+			Instruction::DCmpL => opcode(opcodes::DCMPL)?,
+			Instruction::DCmpG => opcode(opcodes::DCMPG)?,
+			Instruction::DConst0 => opcode(opcodes::DCONST_0)?,
+			Instruction::DConst1 => opcode(opcodes::DCONST_1)?,
+			Instruction::DDiv => opcode(opcodes::DDIV)?,
+
+			Instruction::DLoad { local_idx } => match local_idx {
+				0 => opcode(opcodes::DLOAD_0)?,
+				1 => opcode(opcodes::DLOAD_1)?,
+				2 => opcode(opcodes::DLOAD_2)?,
+				3 => opcode(opcodes::DLOAD_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::DLOAD)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::DLOAD)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::DMul => opcode(opcodes::DMUL)?,
+			Instruction::DNeg => opcode(opcodes::DNEG)?,
+			Instruction::DRem => opcode(opcodes::DREM)?,
+			Instruction::DReturn => opcode(opcodes::DRETURN)?,
+
+			Instruction::DStore { local_idx } => match local_idx {
+				0 => opcode(opcodes::DSTORE_0)?,
+				1 => opcode(opcodes::DSTORE_1)?,
+				2 => opcode(opcodes::DSTORE_2)?,
+				3 => opcode(opcodes::DSTORE_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::DSTORE)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::DSTORE)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::DSub => opcode(opcodes::DSUB)?,
+			Instruction::Dup => opcode(opcodes::DUP)?,
+			Instruction::DupX1 => opcode(opcodes::DUP_X1)?,
+			Instruction::DupX2 => opcode(opcodes::DUP_X2)?,
+			Instruction::Dup2 => opcode(opcodes::DUP2)?,
+			Instruction::Dup2X1 => opcode(opcodes::DUP2_X1)?,
+			Instruction::Dup2X2 => opcode(opcodes::DUP2_X2)?,
+			Instruction::F2D => opcode(opcodes::F2D)?,
+			Instruction::F2I => opcode(opcodes::F2I)?,
+			Instruction::F2L => opcode(opcodes::F2L)?,
+			Instruction::FAdd => opcode(opcodes::FADD)?,
+			Instruction::FALoad => opcode(opcodes::FALOAD)?,
+			Instruction::FAStore => opcode(opcodes::FASTORE)?,
+			Instruction::FCmpL => opcode(opcodes::FCMPL)?,
+			Instruction::FCmpG => opcode(opcodes::FCMPG)?,
+			Instruction::FConst0 => opcode(opcodes::FCONST_0)?,
+			Instruction::FConst1 => opcode(opcodes::FCONST_1)?,
+			Instruction::FConst2 => opcode(opcodes::FCONST_2)?,
+			Instruction::FDiv => opcode(opcodes::FDIV)?,
+
+			Instruction::FLoad { local_idx } => match local_idx {
+				0 => opcode(opcodes::FLOAD_0)?,
+				1 => opcode(opcodes::FLOAD_1)?,
+				2 => opcode(opcodes::FLOAD_2)?,
+				3 => opcode(opcodes::FLOAD_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::FLOAD)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::FLOAD)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::FMul => opcode(opcodes::FMUL)?,
+			Instruction::FNeg => opcode(opcodes::FNEG)?,
+			Instruction::FRem => opcode(opcodes::FREM)?,
+			Instruction::FReturn => opcode(opcodes::FRETURN)?,
+
+			Instruction::FStore { local_idx } => match local_idx {
+				0 => opcode(opcodes::FSTORE_0)?,
+				1 => opcode(opcodes::FSTORE_1)?,
+				2 => opcode(opcodes::FSTORE_2)?,
+				3 => opcode(opcodes::FSTORE_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::FSTORE)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::FSTORE)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::FSub => opcode(opcodes::FSUB)?,
+			Instruction::GetField {
+				class,
+				name,
+				descriptor,
+			} => {
+				opcode(opcodes::GETFIELD)?;
+				let idx = cp.add_field_ref(class.clone(), name.clone(), descriptor.jvm_repr());
+				buffer.write_u16::<BigEndian>(idx)?;
+			}
+			Instruction::GetStatic {
+				owner,
+				name,
+				descriptor,
+			} => {
+				opcode(opcodes::GETSTATIC)?;
+				let idx = cp.add_field_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
+				buffer.write_u16::<BigEndian>(idx)?;
+			}
+			Instruction::Goto { target } => {
+				opcode(opcodes::GOTO)?;
+				buffer.write_u16::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned().truncate())?;
+			}
+			Instruction::GotoW { target } => {
+				opcode(opcodes::GOTO_W)?;
+				buffer.write_u32::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned())?;
+			}
+			Instruction::I2B => opcode(opcodes::I2B)?,
+			Instruction::I2C => opcode(opcodes::I2C)?,
+			Instruction::I2D => opcode(opcodes::I2D)?,
+			Instruction::I2F => opcode(opcodes::I2F)?,
+			Instruction::I2L => opcode(opcodes::I2L)?,
+			Instruction::I2S => opcode(opcodes::I2S)?,
+			Instruction::IAdd => opcode(opcodes::IADD)?,
+			Instruction::IALoad => opcode(opcodes::IALOAD)?,
+			Instruction::IAnd => opcode(opcodes::IAND)?,
+			Instruction::IAStore => opcode(opcodes::IASTORE)?,
+			Instruction::IConst { val } => match val {
+				-1 => opcode(opcodes::ICONST_M1)?,
+				0 => opcode(opcodes::ICONST_0)?,
+				1 => opcode(opcodes::ICONST_1)?,
+				2 => opcode(opcodes::ICONST_2)?,
+				3 => opcode(opcodes::ICONST_3)?,
+				4 => opcode(opcodes::ICONST_4)?,
+				5 => opcode(opcodes::ICONST_5)?,
+				v => {
+					opcode(opcodes::BIPUSH)?;
+					buffer.write_i8(*v)?;
+				}
+			},
+			Instruction::IDiv => opcode(opcodes::IDIV)?,
+			Instruction::IfACmpEq { target } => {
+				opcode(opcodes::IF_ACMPEQ)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfACmpNe { target } => {
+				opcode(opcodes::IF_ACMPNE)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfICmpEq { target } => {
+				opcode(opcodes::IF_ICMPEQ)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfICmpNe { target } => {
+				opcode(opcodes::IF_ICMPNE)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfICmpLt { target } => {
+				opcode(opcodes::IF_ICMPLT)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfICmpGt { target } => {
+				opcode(opcodes::IF_ICMPGT)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfICmpLe { target } => {
+				opcode(opcodes::IF_ICMPLE)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfICmpGe { target } => {
+				opcode(opcodes::IF_ICMPGE)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfEq { target } => {
+				opcode(opcodes::IFEQ)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfNe { target } => {
+				opcode(opcodes::IFNE)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfLt { target } => {
+				opcode(opcodes::IFLT)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfGt { target } => {
+				opcode(opcodes::IFGT)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfLe { target } => {
+				opcode(opcodes::IFLE)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfGe { target } => {
+				opcode(opcodes::IFGE)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfNonNull { target } => {
+				opcode(opcodes::IFNONNULL)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IfNull { target } => {
+				opcode(opcodes::IFNULL)?;
+				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+			}
+			Instruction::IInc { local_index, val } => {
+				if *local_index > u16::from(u8::MAX) || *val > i16::from(i8::MAX) || *val < i16::from(i8::MIN) {
+					opcode(opcodes::WIDE)?;
+					opcode(opcodes::IINC)?;
+					buffer.write_u16::<BigEndian>(*local_index)?;
+					buffer.write_i16::<BigEndian>(*val)?;
+				} else {
+					opcode(opcodes::IINC)?;
+					buffer.write_u8(local_index.truncate())?;
+					buffer.write_i8(val.truncate())?;
+				}
+			}
+
+			Instruction::ILoad { local_idx } => match local_idx {
+				0 => opcode(opcodes::ILOAD_0)?,
+				1 => opcode(opcodes::ILOAD_1)?,
+				2 => opcode(opcodes::ILOAD_2)?,
+				3 => opcode(opcodes::ILOAD_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::ILOAD)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::ILOAD)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::IMul => opcode(opcodes::IMUL)?,
+			Instruction::INeg => opcode(opcodes::INEG)?,
+			Instruction::InstanceOf { class_type } => {
+				let class_idx = cp.add_class(class_type.clone());
+				opcode(opcodes::INSTANCEOF)?;
+				buffer.write_u16::<BigEndian>(class_idx)?;
+			}
+			Instruction::InvokeDynamic {
+				owner,
+				name,
+				descriptor,
+				is_interface,
+				bsm_args,
+			} => {
+				opcode(opcodes::INVOKE_DYNAMIC)?;
+				todo!(
+					"[Instruction::write] InvokeDynamic {}:{} -> {} (interface={}) args={:?}",
+					owner,
+					name,
+					descriptor.jvm_repr(),
+					is_interface,
+					bsm_args
+				);
+			}
+			Instruction::InvokeInterface {
+				owner,
+				name,
+				descriptor,
+				count,
+			} => {
+				opcode(opcodes::INVOKE_INTERFACE)?;
+				let idx = cp.add_interface_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
+				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u8(*count)?;
+				buffer.write_u8(0)?;
+			}
+			Instruction::InvokeSpecial {
+				owner,
+				name,
+				descriptor,
+				is_interface,
+			} => {
+				opcode(opcodes::INVOKE_SPECIAL)?;
+				let idx = if *is_interface {
+					cp.add_interface_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr())
+				} else {
+					cp.add_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr())
+				};
+				buffer.write_u16::<BigEndian>(idx)?;
+			}
+			Instruction::InvokeStatic {
+				owner,
+				name,
+				descriptor,
+				is_interface,
+			} => {
+				opcode(opcodes::INVOKE_STATIC)?;
+				let idx = if *is_interface {
+					cp.add_interface_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr())
+				} else {
+					cp.add_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr())
+				};
+				buffer.write_u16::<BigEndian>(idx)?;
+			}
+			Instruction::InvokeVirtual {
+				owner,
+				name,
+				descriptor,
+			} => {
+				opcode(opcodes::INVOKE_VIRTUAL)?;
+				let idx = cp.add_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
+				buffer.write_u16::<BigEndian>(idx)?;
+			}
+			Instruction::IOr => opcode(opcodes::IOR)?,
+			Instruction::IRem => opcode(opcodes::IREM)?,
+			Instruction::IReturn => opcode(opcodes::IRETURN)?,
+			Instruction::IShl => opcode(opcodes::ISHL)?,
+			Instruction::IShr => opcode(opcodes::ISHR)?,
+
+			Instruction::IStore { local_idx } => match local_idx {
+				0 => opcode(opcodes::ISTORE_0)?,
+				1 => opcode(opcodes::ISTORE_1)?,
+				2 => opcode(opcodes::ISTORE_2)?,
+				3 => opcode(opcodes::ISTORE_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::ISTORE)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::ISTORE)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::ISub => opcode(opcodes::ISUB)?,
+			Instruction::IUShr => opcode(opcodes::IUSHR)?,
+			Instruction::IXor => opcode(opcodes::IXOR)?,
+			Instruction::Jsr { target } => {
+				opcode(opcodes::JSR)?;
+				buffer.write_u16::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned().truncate())?;
+			}
+			Instruction::JsrW { target } => {
+				opcode(opcodes::JSR_W)?;
+				buffer.write_u32::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned())?;
+			}
+			Instruction::LongToDouble => opcode(opcodes::L2D)?,
+			Instruction::LongToFloat => opcode(opcodes::L2F)?,
+			Instruction::LongToInt => opcode(opcodes::L2I)?,
+			Instruction::LAdd => opcode(opcodes::LADD)?,
+			Instruction::LALoad => opcode(opcodes::LALOAD)?,
+			Instruction::LAnd => opcode(opcodes::LAND)?,
+			Instruction::LAStore => opcode(opcodes::LASTORE)?,
+			Instruction::LCmp => opcode(opcodes::LCMP)?,
+			Instruction::LConst { value } => match value {
+				0 => opcode(opcodes::LCONST_0)?,
+				1 => opcode(opcodes::LCONST_1)?,
+				_ => panic!("Unrecognized LConst value {}", value),
+			},
+			Instruction::Ldc { constant } => {
+				let idx = match constant {
+					LIRLDCConstant::Int(v) => cp.add_integer(v.cast_unsigned()),
+					LIRLDCConstant::Float(v) => cp.add_float(*v),
+					LIRLDCConstant::String(v) => cp.add_string(v.clone()),
+					LIRLDCConstant::Class(v) => cp.add_class(v.clone()),
+					LIRLDCConstant::MethodType(v) => cp.add_method_type(v.jvm_repr()),
+					LIRLDCConstant::MethodHandle(v) => {
+						let field_ref = match &v.descriptor {
+							LIRHandleDescriptor::Field(f) => {
+								cp.add_field_ref(v.owner.clone(), v.name.clone(), f.jvm_repr())
+							}
+							LIRHandleDescriptor::Method(m) => {
+								if v.is_interface {
+									cp.add_interface_method_ref(v.owner.clone(), v.name.clone(), m.jvm_repr())
+								} else {
+									cp.add_method_ref(v.owner.clone(), v.name.clone(), m.jvm_repr())
+								}
+							}
+						};
+						cp.add_method_handle(v.kind.into(), field_ref)
+					}
+					LIRLDCConstant::Long(_) | LIRLDCConstant::Double(_) => {
+						bail!("Long and Double must use Ldc2_w")
+					}
+				};
+
+				if idx <= 255 {
+					opcode(opcodes::LDC)?;
+					buffer.write_u8(idx.truncate())?;
+				} else {
+					opcode(opcodes::LDC_W)?;
+					buffer.write_u16::<BigEndian>(idx)?;
+				}
+			}
+			Instruction::LDiv => opcode(opcodes::LDIV)?,
+			Instruction::LLoad { local_idx } => match local_idx {
+				0 => opcode(opcodes::LLOAD_0)?,
+				1 => opcode(opcodes::LLOAD_1)?,
+				2 => opcode(opcodes::LLOAD_2)?,
+				3 => opcode(opcodes::LLOAD_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::LLOAD)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::LLOAD)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::LMul => opcode(opcodes::LMUL)?,
+			Instruction::LNeg => opcode(opcodes::LNEG)?,
+			Instruction::LookupSwitch { default_target, pairs } => {
+				opcode(opcodes::LOOKUPSWITCH)?;
+
+				let current_offset = pc + 1;
+				let padding = (4 - (current_offset % 4)) % 4;
+				for _ in 0..padding {
+					buffer.write_u8(0)?;
+				}
+
+				let default_offset = calc_jmp_offset(default_target)?;
+				buffer.write_i32::<BigEndian>(default_offset)?;
+
+				let npairs = pairs.len();
+				if npairs > i32::MAX as usize {
+					bail!("lookupswitch has too many pairs: {}", npairs);
+				}
+				#[allow(
+					clippy::cast_possible_truncation,
+					clippy::cast_possible_wrap,
+					clippy::cast_sign_loss,
+					reason = "AAA"
+				)]
+				buffer.write_i32::<BigEndian>(npairs as i32)?;
+
+				for (match_key, target) in pairs {
+					buffer.write_i32::<BigEndian>(*match_key)?;
+					let offset = calc_jmp_offset(target)?;
+					buffer.write_i32::<BigEndian>(offset)?;
+				}
+			}
+			Instruction::LOr => opcode(opcodes::LOR)?,
+			Instruction::LRem => opcode(opcodes::LREM)?,
+			Instruction::LReturn => opcode(opcodes::LRETURN)?,
+			Instruction::LShl => opcode(opcodes::LSHL)?,
+			Instruction::LShr => opcode(opcodes::LSHR)?,
+			Instruction::LStore { local_idx } => match local_idx {
+				0 => opcode(opcodes::LSTORE_0)?,
+				1 => opcode(opcodes::LSTORE_1)?,
+				2 => opcode(opcodes::LSTORE_2)?,
+				3 => opcode(opcodes::LSTORE_3)?,
+				_ => {
+					if *local_idx > u16::from(u8::MAX) {
+						opcode(opcodes::WIDE)?;
+						opcode(opcodes::LSTORE)?;
+						buffer.write_u16::<BigEndian>(*local_idx)?;
+					} else {
+						opcode(opcodes::LSTORE)?;
+						buffer.write_u8(local_idx.truncate())?;
+					}
+				}
+			},
+			Instruction::LSub => opcode(opcodes::LSUB)?,
+			Instruction::LUShr => opcode(opcodes::LUSHR)?,
+			Instruction::LXor => opcode(opcodes::LXOR)?,
+			Instruction::MonitorEnter => opcode(opcodes::MONITORENTER)?,
+			Instruction::MonitorExit => opcode(opcodes::MONITOREXIT)?,
+			Instruction::MultiANewArray { element_ty, dimensions } => {
+				let element_idx = cp.add_class(element_ty.clone());
+				opcode(opcodes::MULTIANEWARRAY)?;
+				buffer.write_u16::<BigEndian>(element_idx)?;
+				buffer.write_u8(*dimensions)?;
+			}
+			Instruction::New { object_ty } => {
+				let object_idx = cp.add_class(object_ty.clone());
+				opcode(opcodes::NEW)?;
+				buffer.write_u16::<BigEndian>(object_idx)?;
+			}
+			Instruction::NewArray { ty } => {
+				opcode(opcodes::NEWARRAY)?;
+				buffer.write_u8(ty.id())?;
+			}
+			Instruction::Nop => opcode(opcodes::NOP)?,
+			Instruction::Pop => opcode(opcodes::POP)?,
+			Instruction::Pop2 => opcode(opcodes::POP2)?,
+			Instruction::PutField {
+				owner,
+				name,
+				descriptor,
+			} => {
+				opcode(opcodes::PUTFIELD)?;
+				let idx = cp.add_field_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
+				buffer.write_u16::<BigEndian>(idx)?;
+			}
+			Instruction::PutStatic {
+				owner,
+				name,
+				descriptor,
+			} => {
+				opcode(opcodes::PUTSTATIC)?;
+				let idx = cp.add_field_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
+				buffer.write_u16::<BigEndian>(idx)?;
+			}
+			Instruction::Ret { local_idx } => {
+				if *local_idx > u16::from(u8::MAX) {
+					opcode(opcodes::WIDE)?;
+					opcode(opcodes::RET)?;
+					buffer.write_u16::<BigEndian>(*local_idx)?;
+				} else {
+					opcode(opcodes::RET)?;
+					buffer.write_u8(local_idx.truncate())?;
+				}
+			}
+			Instruction::Return => opcode(opcodes::RETURN)?,
+			Instruction::SALoad => opcode(opcodes::SALOAD)?,
+			Instruction::SAStore => opcode(opcodes::SASTORE)?,
+			Instruction::SIPush { val } => {
+				opcode(opcodes::SIPUSH)?;
+				buffer.write_i16::<BigEndian>(*val)?;
+			}
+			Instruction::Swap => opcode(opcodes::SWAP)?,
+			Instruction::TableSwitch {
+				default_target,
+				low,
+				high,
+				targets,
+			} => {
+				opcode(opcodes::TABLESWITCH)?;
+
+				let current_offset = pc + 1;
+				let padding = (4 - (current_offset % 4)) % 4;
+				for _ in 0..padding {
+					buffer.write_u8(0)?;
+				}
+
+				let default_offset = calc_jmp_offset(default_target)?;
+				buffer.write_i32::<BigEndian>(default_offset)?;
+
+				buffer.write_i32::<BigEndian>(*low)?;
+				buffer.write_i32::<BigEndian>(*high)?;
+
+				#[allow(clippy::cast_possible_truncation, reason = "AAAA")]
+				if targets.len() != (i64::from(*high) - i64::from(*low) + 1).cast_unsigned() as usize {
+					bail!(
+						"TableSwitch targets length {} does not match range {} to {}",
+						targets.len(),
+						low,
+						high
+					);
+				}
+
+				for target in targets {
+					let offset = calc_jmp_offset(target)?;
+					buffer.write_i32::<BigEndian>(offset)?;
+				}
+			}
+		}
+
+		Ok(())
 	}
 }
