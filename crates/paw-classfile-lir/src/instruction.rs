@@ -31,8 +31,7 @@ pub enum ArrayType {
 impl ArrayType {
 	#[must_use]
 	pub fn id(&self) -> u8 {
-		// SAFETY: ArrayType is repr(C, u8), therefore the byte at offset 0 of the struct is the discriminant
-		unsafe { core::ptr::from_ref(self).cast::<u8>().read() }
+		*self as u8
 	}
 }
 
