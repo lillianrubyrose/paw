@@ -498,20 +498,21 @@ impl ConstantValueAttribute {
 	}
 }
 
-#[derive(Debug, Clone, Copy, AnyBitPattern)]
+#[derive(Debug, Clone)]
 pub struct CodeAttributeException {
 	pub start_pc: u16,
 	pub end_pc: u16,
 	pub handler_pc: u16,
-	pub catch_type: u16,
+	pub catch_type: Option<String>, // ClassRef
 }
 
 impl CodeAttributeException {
-	pub fn write<W: WriteBytesExt>(&self, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let idx = self.catch_type.as_ref().map_or(0, |t| cp.add_class(t.clone()));
 		info.write_u16::<BigEndian>(self.start_pc)?;
 		info.write_u16::<BigEndian>(self.end_pc)?;
 		info.write_u16::<BigEndian>(self.handler_pc)?;
-		info.write_u16::<BigEndian>(self.catch_type)?;
+		info.write_u16::<BigEndian>(idx)?;
 		Ok(())
 	}
 }
@@ -560,9 +561,17 @@ impl CodeAttribute {
 				handler_pc: reader
 					.read_u16::<BigEndian>()
 					.wrap_err("failed to read exception_table handler_pc from Code attribute")?,
-				catch_type: reader
-					.read_u16::<BigEndian>()
-					.wrap_err("failed to read exception_table catch_type from Code attribute")?,
+				catch_type: {
+					let idx = reader
+						.read_u16::<BigEndian>()
+						.wrap_err("failed to read exception_table catch_type from Code attribute")?;
+					if idx == 0 {
+						None
+					} else {
+						let class = cp.get_class(idx)?;
+						Some(cp.resolve_class_name(class)?)
+					}
+				},
 			})
 		})?;
 		let attrs_count = usize::from(
@@ -691,7 +700,7 @@ impl CodeAttribute {
 
 		info.write_u16::<BigEndian>(self.exception_table.len().truncate())?;
 		for exc in &self.exception_table {
-			exc.write(info)?;
+			exc.write(cp, info)?;
 		}
 
 		info.write_u16::<BigEndian>(self.attributes.len().truncate())?;
