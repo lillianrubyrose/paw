@@ -2189,12 +2189,14 @@ impl Instruction {
 				_ => panic!("Unrecognized LConst value {}", value),
 			},
 			Instruction::Ldc { constant } => {
-				let idx = match constant {
-					LIRLDCConstant::Int(v) => cp.add_integer(v.cast_unsigned()),
-					LIRLDCConstant::Float(v) => cp.add_float(*v),
-					LIRLDCConstant::String(v) => cp.add_string(v.clone()),
-					LIRLDCConstant::Class(v) => cp.add_class(v.clone()),
-					LIRLDCConstant::MethodType(v) => cp.add_method_type(v.jvm_repr()),
+				let (idx, is_wide) = match constant {
+					LIRLDCConstant::Int(v) => (cp.add_integer(v.cast_unsigned()), false),
+					LIRLDCConstant::Float(v) => (cp.add_float(*v), false),
+					LIRLDCConstant::Long(v) => (cp.add_long(v.cast_unsigned()), true),
+					LIRLDCConstant::Double(v) => (cp.add_double(*v), true),
+					LIRLDCConstant::String(v) => (cp.add_string(v.clone()), false),
+					LIRLDCConstant::Class(v) => (cp.add_class(v.clone()), false),
+					LIRLDCConstant::MethodType(v) => (cp.add_method_type(v.jvm_repr()), false),
 					LIRLDCConstant::MethodHandle(v) => {
 						let field_ref = match &v.descriptor {
 							LIRHandleDescriptor::Field(f) => {
@@ -2208,14 +2210,14 @@ impl Instruction {
 								}
 							}
 						};
-						cp.add_method_handle(v.kind.into(), field_ref)
-					}
-					LIRLDCConstant::Long(_) | LIRLDCConstant::Double(_) => {
-						bail!("Long and Double must use Ldc2_w")
+						(cp.add_method_handle(v.kind.into(), field_ref), false)
 					}
 				};
 
-				if idx <= 255 {
+				if is_wide {
+					opcode(opcodes::LDC2_W)?;
+					buffer.write_u16::<BigEndian>(idx)?;
+				} else if idx <= 255 {
 					opcode(opcodes::LDC)?;
 					buffer.write_u8(idx.truncate())?;
 				} else {

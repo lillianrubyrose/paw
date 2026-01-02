@@ -1,5 +1,5 @@
 use std::{
-	fs,
+	fs::{self, File, OpenOptions},
 	io::Cursor,
 	path::{Path, PathBuf},
 };
@@ -39,6 +39,8 @@ enum Commands {
 	Cp { path: PathBuf },
 	/// Dumps basic class file header information
 	Classinfo { path: PathBuf },
+	/// Recompile
+	Recompile { path: PathBuf },
 }
 
 fn main() -> Result<()> {
@@ -58,6 +60,7 @@ fn main() -> Result<()> {
 		Commands::Field { path, name } => dump_field(&path, &name)?,
 		Commands::Cp { path } => dump_cp(&path)?,
 		Commands::Classinfo { path } => dump_classinfo(&path)?,
+		Commands::Recompile { path } => recompile(&path)?,
 	}
 
 	Ok(())
@@ -234,6 +237,27 @@ fn dump_classinfo(path: &Path) -> Result<()> {
 	println!("Methods Count: {}", cf.methods.len());
 	println!("Attributes Count: {}", cf.attributes.len());
 
+	Ok(())
+}
+
+fn recompile(path: &Path) -> Result<()> {
+	let class = parse_lir(path)?;
+
+	let output = path.parent().unwrap().join(format!(
+		"{}.paw.class",
+		path.file_name()
+			.unwrap()
+			.to_string_lossy()
+			.to_string()
+			.strip_suffix(".class")
+			.unwrap()
+	));
+	let mut output = OpenOptions::new()
+		.create(true)
+		.truncate(true)
+		.write(true)
+		.open(output)?;
+	class.to_class_file()?.write(&mut output)?;
 	Ok(())
 }
 
