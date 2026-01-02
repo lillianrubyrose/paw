@@ -1970,10 +1970,7 @@ impl Instruction {
 				3 => opcode(opcodes::ICONST_3)?,
 				4 => opcode(opcodes::ICONST_4)?,
 				5 => opcode(opcodes::ICONST_5)?,
-				v => {
-					opcode(opcodes::BIPUSH)?;
-					buffer.write_i8(*v)?;
-				}
+				_ => unreachable!("IConst should never hold a value outside of the -1..=5"),
 			},
 			Instruction::IDiv => opcode(opcodes::IDIV)?,
 			Instruction::IfACmpEq { target } => {
