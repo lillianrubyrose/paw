@@ -677,7 +677,12 @@ impl CodeAttribute {
 		})
 	}
 
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		bsm_pool: &[BootstrapMethod],
+	) -> Result<()> {
 		info.write_u16::<BigEndian>(self.max_stack)?;
 		info.write_u16::<BigEndian>(self.max_locals)?;
 
@@ -692,7 +697,7 @@ impl CodeAttribute {
 
 		let mut code_buf = Vec::new();
 		for (pc, inst, _) in &self.code {
-			inst.write(&mut code_buf, cp, *pc, &label_map)?;
+			inst.write(&mut code_buf, cp, *pc, &label_map, bsm_pool)?;
 		}
 		#[allow(clippy::cast_possible_truncation, reason = "aaaa")]
 		info.write_u32::<BigEndian>(code_buf.len() as u32)?;
@@ -2433,4 +2438,31 @@ impl RuntimeTypeAnnotationTargetInfo {
 		}
 		Ok(())
 	}
+}
+
+#[must_use]
+pub fn bsm_eq(bsm: &BootstrapMethod, handle: &LIRMethodHandle, args: &[BootstrapMethodArgument]) -> bool {
+	if &bsm.method != handle {
+		return false;
+	}
+	if bsm.arguments.len() != args.len() {
+		return false;
+	}
+	for (a, b) in bsm.arguments.iter().zip(args.iter()) {
+		let match_arg = match (a, b) {
+			(BootstrapMethodArgument::Int(x), BootstrapMethodArgument::Int(y)) => x == y,
+			(BootstrapMethodArgument::Long(x), BootstrapMethodArgument::Long(y)) => x == y,
+			(BootstrapMethodArgument::Float(x), BootstrapMethodArgument::Float(y)) => x.to_bits() == y.to_bits(),
+			(BootstrapMethodArgument::Double(x), BootstrapMethodArgument::Double(y)) => x.to_bits() == y.to_bits(),
+			(BootstrapMethodArgument::String(x), BootstrapMethodArgument::String(y))
+			| (BootstrapMethodArgument::Class(x), BootstrapMethodArgument::Class(y)) => x == y,
+			(BootstrapMethodArgument::MethodHandle(x), BootstrapMethodArgument::MethodHandle(y)) => x == y,
+			(BootstrapMethodArgument::MethodType(x), BootstrapMethodArgument::MethodType(y)) => x == y,
+			_ => false,
+		};
+		if !match_arg {
+			return false;
+		}
+	}
+	true
 }

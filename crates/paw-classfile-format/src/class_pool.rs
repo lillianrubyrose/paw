@@ -396,6 +396,21 @@ impl ConstantPool {
 		self.push(CPTag::MethodType(MethodTypeTag { descriptor_index }))
 	}
 
+	pub fn add_invoke_dynamic(&mut self, bsm_attr_idx: u16, name: String, descriptor: String) -> u16 {
+		let name_and_ty_idx = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(|t| {
+			matches!(t, CPEntry::Tag(CPTag::InvokeDynamic(t))
+                if t.bootstrap_method_attr_index == bsm_attr_idx
+                && t.name_and_ty_index == name_and_ty_idx)
+		}) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::InvokeDynamic(InvokeDynamicTag {
+			bootstrap_method_attr_index: bsm_attr_idx,
+			name_and_ty_index: name_and_ty_idx,
+		}))
+	}
+
 	pub fn add_module(&mut self, name: String) -> u16 {
 		let name_index = self.add_utf8(name);
 		if let Some(idx) = self

@@ -11,7 +11,7 @@ use paw_classfile_format::{
 };
 
 use crate::{
-	attribute::{BootstrapMethodArgument, LIRClassAttribute},
+	attribute::{BootstrapMethod, BootstrapMethodArgument, LIRClassAttribute},
 	method::{LIRHandleDescriptor, LIRMethodHandle},
 };
 
@@ -793,10 +793,9 @@ pub enum Instruction {
 	/// Invoke a dynamically-computed call site
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokedynamic>
 	InvokeDynamic {
-		owner: String,
+		bsm_handle: LIRMethodHandle,
 		name: String,
 		descriptor: MethodDescriptor,
-		is_interface: bool,
 		bsm_args: Vec<BootstrapMethodArgument>,
 	},
 
@@ -1408,10 +1407,9 @@ impl Instruction {
 				let nat = cp.get_name_and_type(tag.name_and_ty_index)?;
 				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
 				Self::InvokeDynamic {
-					owner: bsm.method.owner,
+					bsm_handle: bsm.method,
 					name,
 					descriptor,
-					is_interface: bsm.method.is_interface,
 					bsm_args: bsm.arguments,
 				}
 			}
@@ -1749,6 +1747,7 @@ impl Instruction {
 		cp: &mut ConstantPool,
 		pc: u32,
 		label_map: &HashMap<LIRResolvedLabel, u32>,
+		bsm_pool: &[BootstrapMethod],
 	) -> Result<()> {
 		let calc_jmp_offset = |target: &LIRLabel| -> Result<i32> {
 			let target_pc = match target {
@@ -2073,21 +2072,22 @@ impl Instruction {
 				buffer.write_u16::<BigEndian>(class_idx)?;
 			}
 			Instruction::InvokeDynamic {
-				owner,
+				bsm_handle,
 				name,
 				descriptor,
-				is_interface,
 				bsm_args,
 			} => {
 				opcode(opcodes::INVOKE_DYNAMIC)?;
-				todo!(
-					"[Instruction::write] InvokeDynamic {}:{} -> {} (interface={}) args={:?}",
-					owner,
-					name,
-					descriptor.jvm_repr(),
-					is_interface,
-					bsm_args
-				);
+
+				let bsm_idx = bsm_pool
+					.iter()
+					.position(|bsm| crate::attribute::bsm_eq(bsm, bsm_handle, bsm_args))
+					.ok_or_eyre("bsm not found during write")?;
+
+				let idx = cp.add_invoke_dynamic(bsm_idx.truncate(), name.clone(), descriptor.jvm_repr());
+				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u8(0)?;
+				buffer.write_u8(0)?;
 			}
 			Instruction::InvokeInterface {
 				owner,

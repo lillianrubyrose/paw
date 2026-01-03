@@ -4,8 +4,9 @@ use paw_classfile_format::{
 };
 
 use crate::{
-	attribute::{LIRClassAttribute, LIRFieldAttribute, LIRMethodAttribute},
+	attribute::{BootstrapMethod, BootstrapMethodsAttribute, LIRClassAttribute, LIRFieldAttribute, LIRMethodAttribute},
 	field::LIRField,
+	instruction::Instruction,
 	method::LIRMethod,
 };
 
@@ -128,12 +129,6 @@ impl LIRClass {
 		let super_class = self.super_class.as_ref().map_or(0, |s| cp.add_class(s.clone()));
 		let interfaces = self.interfaces.iter().map(|i| cp.add_class(i.clone())).collect();
 
-		let attributes = self
-			.attributes
-			.iter()
-			.map(|a| a.write(&mut cp))
-			.collect::<Result<Vec<_>>>()?;
-
 		let fields = self
 			.fields
 			.iter()
@@ -154,6 +149,32 @@ impl LIRClass {
 			})
 			.collect::<Result<Vec<_>>>()?;
 
+		let mut bsm_pool: Vec<BootstrapMethod> = Vec::new();
+		for method in &self.methods {
+			for attr in &method.attributes {
+				if let LIRMethodAttribute::Code(code) = attr {
+					for (_, inst, _) in &code.code {
+						let Instruction::InvokeDynamic {
+							bsm_handle, bsm_args, ..
+						} = inst
+						else {
+							continue;
+						};
+
+						if !bsm_pool
+							.iter()
+							.any(|b| crate::attribute::bsm_eq(b, bsm_handle, bsm_args))
+						{
+							bsm_pool.push(BootstrapMethod {
+								method: bsm_handle.clone(),
+								arguments: bsm_args.clone(),
+							});
+						}
+					}
+				}
+			}
+		}
+
 		let methods = self
 			.methods
 			.iter()
@@ -163,7 +184,7 @@ impl LIRClass {
 				let attributes = m
 					.attributes
 					.iter()
-					.map(|a| a.write(&mut cp))
+					.map(|a| a.write(&mut cp, &bsm_pool))
 					.collect::<Result<Vec<_>>>()?;
 				Ok(MethodInfo {
 					access_flags: m.access_flags,
@@ -173,6 +194,17 @@ impl LIRClass {
 				})
 			})
 			.collect::<Result<Vec<_>>>()?;
+
+		let mut attributes = Vec::new();
+		for attr in &self.attributes {
+			if !matches!(attr, LIRClassAttribute::BootstrapMethods(_)) {
+				attributes.push(attr.write(&mut cp)?);
+			}
+		}
+		if !bsm_pool.is_empty() {
+			let attr = LIRClassAttribute::BootstrapMethods(BootstrapMethodsAttribute { methods: bsm_pool });
+			attributes.push(attr.write(&mut cp)?);
+		}
 
 		Ok(ClassFile {
 			version: ClassFileVersion {

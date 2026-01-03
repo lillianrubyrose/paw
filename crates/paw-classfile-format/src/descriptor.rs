@@ -2,7 +2,7 @@ use std::{collections::VecDeque, fmt::Write as _, str::FromStr};
 
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Descriptor {
 	Byte,
 	Char,
@@ -107,7 +107,7 @@ pub enum DescriptorParseErr {
 	MissingEndParen,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MethodDescriptor {
 	pub ret: Option<Descriptor>,
 	pub args: Vec<Descriptor>,

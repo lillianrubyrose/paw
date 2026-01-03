@@ -8,7 +8,7 @@ use paw_classfile_format::{
 };
 use thiserror::Error;
 
-use crate::attribute::LIRMethodAttribute;
+use crate::attribute::{BootstrapMethod, LIRMethodAttribute};
 
 // https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-5.html#jvms-5.4.3.5
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -64,14 +64,14 @@ impl From<LIRMethodHandleKind> for u8 {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LIRHandleDescriptor {
 	Field(Descriptor),
 	Method(MethodDescriptor),
 }
 
 // https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.8
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LIRMethodHandle {
 	pub kind: LIRMethodHandleKind,
 	pub owner: String,
@@ -136,7 +136,7 @@ pub struct LIRMethod {
 }
 
 impl LIRMethodAttribute {
-	pub fn write(&self, cp: &mut ConstantPool) -> Result<AttributeInfo> {
+	pub fn write(&self, cp: &mut ConstantPool, bsm_pool: &[BootstrapMethod]) -> Result<AttributeInfo> {
 		let name = match self {
 			LIRMethodAttribute::Code(..) => "Code",
 			LIRMethodAttribute::Exceptions(..) => "Exceptions",
@@ -158,7 +158,7 @@ impl LIRMethodAttribute {
 
 		match self {
 			LIRMethodAttribute::Code(c) => {
-				c.write(cp, &mut info)?;
+				c.write(cp, &mut info, bsm_pool)?;
 			}
 			LIRMethodAttribute::Exceptions(e) => {
 				e.write(cp, &mut info)?;
