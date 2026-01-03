@@ -1036,8 +1036,8 @@ impl InnerClassesAttribute {
 #[derive(Debug, Clone)]
 pub struct EnclosingMethodAttribute {
 	pub class: String,
-	pub method_name: String,
-	pub method_descriptor: MethodDescriptor,
+	pub method_name: Option<String>,
+	pub method_descriptor: Option<MethodDescriptor>,
 }
 
 impl EnclosingMethodAttribute {
@@ -1050,10 +1050,14 @@ impl EnclosingMethodAttribute {
 			.wrap_err("failed to read method_index from EnclosingMethod attribute")?;
 
 		let class = cp.resolve_class_name(cp.get_class(class_idx)?)?;
-
-		let method_name_and_ty = cp.get_name_and_type(method_idx)?;
-		let method_name = cp.get_utf8(method_name_and_ty.name_index)?;
-		let method_descriptor = cp.get_utf8(method_name_and_ty.descriptor_index)?.parse()?;
+		let (method_name, method_descriptor) = if method_idx == 0 {
+			(None, None)
+		} else {
+			let method_name_and_ty = cp.get_name_and_type(method_idx)?;
+			let method_name = cp.get_utf8(method_name_and_ty.name_index)?;
+			let method_descriptor = cp.get_utf8(method_name_and_ty.descriptor_index)?.parse()?;
+			(Some(method_name), Some(method_descriptor))
+		};
 
 		Ok(EnclosingMethodAttribute {
 			class,
@@ -1064,7 +1068,13 @@ impl EnclosingMethodAttribute {
 
 	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
 		let class_idx = cp.add_class(self.class.clone());
-		let method_name_and_ty = cp.add_name_and_type(self.method_name.clone(), self.method_descriptor.jvm_repr());
+		let method_name_and_ty = if let Some(method_name) = &self.method_name
+			&& let Some(method_desc) = &self.method_descriptor
+		{
+			cp.add_name_and_type(method_name.clone(), method_desc.jvm_repr())
+		} else {
+			0
+		};
 		info.write_u16::<BigEndian>(class_idx)?;
 		info.write_u16::<BigEndian>(method_name_and_ty)?;
 		Ok(())
