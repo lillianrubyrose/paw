@@ -615,7 +615,6 @@ impl CodeAttribute {
 		for (_, inst, _) in &mut code {
 			match inst {
 				Instruction::Goto { target }
-				| Instruction::GotoW { target }
 				| Instruction::IfEq { target }
 				| Instruction::IfNe { target }
 				| Instruction::IfLt { target }
@@ -632,8 +631,7 @@ impl CodeAttribute {
 				| Instruction::IfACmpNe { target }
 				| Instruction::IfNull { target }
 				| Instruction::IfNonNull { target }
-				| Instruction::Jsr { target }
-				| Instruction::JsrW { target } => {
+				| Instruction::Jsr { target } => {
 					resolve_unresolved_label(target);
 				}
 

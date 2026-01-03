@@ -642,12 +642,6 @@ pub enum Instruction {
 		target: LIRLabel,
 	},
 
-	/// Branch always (wide index)
-	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto_w>
-	GotoW {
-		target: LIRLabel,
-	},
-
 	/// Convert int to byte
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.i2b>
 	I2B,
@@ -876,12 +870,6 @@ pub enum Instruction {
 	/// Jump subroutine
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr>
 	Jsr {
-		target: LIRLabel,
-	},
-
-	/// Jump subroutine (wide index)
-	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr_w>
-	JsrW {
 		target: LIRLabel,
 	},
 
@@ -1285,7 +1273,7 @@ impl Instruction {
 			opcodes::GOTO => Instruction::Goto {
 				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
-			opcodes::GOTO_W => Instruction::GotoW {
+			opcodes::GOTO_W => Instruction::Goto {
 				target: calc_jmp_target(buffer.read_i32::<BigEndian>()?),
 			},
 			opcodes::I2B => Instruction::I2B,
@@ -1529,7 +1517,7 @@ impl Instruction {
 			opcodes::JSR => Instruction::Jsr {
 				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
 			},
-			opcodes::JSR_W => Instruction::JsrW {
+			opcodes::JSR_W => Instruction::Jsr {
 				target: calc_jmp_target(buffer.read_i32::<BigEndian>()?),
 			},
 			opcodes::L2D => Instruction::LongToDouble,
@@ -1943,12 +1931,14 @@ impl Instruction {
 				buffer.write_u16::<BigEndian>(idx)?;
 			}
 			Instruction::Goto { target } => {
-				opcode(opcodes::GOTO)?;
-				buffer.write_u16::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned().truncate())?;
-			}
-			Instruction::GotoW { target } => {
-				opcode(opcodes::GOTO_W)?;
-				buffer.write_u32::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned())?;
+				let offset = calc_jmp_offset(target)?;
+				if let Ok(offset) = i16::try_from(offset) {
+					opcode(opcodes::GOTO)?;
+					buffer.write_i16::<BigEndian>(offset)?;
+				} else {
+					opcode(opcodes::GOTO_W)?;
+					buffer.write_i32::<BigEndian>(offset)?;
+				}
 			}
 			Instruction::I2B => opcode(opcodes::I2B)?,
 			Instruction::I2C => opcode(opcodes::I2C)?,
@@ -2164,12 +2154,14 @@ impl Instruction {
 			Instruction::IUShr => opcode(opcodes::IUSHR)?,
 			Instruction::IXor => opcode(opcodes::IXOR)?,
 			Instruction::Jsr { target } => {
-				opcode(opcodes::JSR)?;
-				buffer.write_u16::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned().truncate())?;
-			}
-			Instruction::JsrW { target } => {
-				opcode(opcodes::JSR_W)?;
-				buffer.write_u32::<BigEndian>(calc_jmp_offset(target)?.cast_unsigned())?;
+				let offset = calc_jmp_offset(target)?;
+				if let Ok(offset) = i16::try_from(offset) {
+					opcode(opcodes::JSR)?;
+					buffer.write_i16::<BigEndian>(offset)?;
+				} else {
+					opcode(opcodes::JSR_W)?;
+					buffer.write_i32::<BigEndian>(offset)?;
+				}
 			}
 			Instruction::LongToDouble => opcode(opcodes::L2D)?,
 			Instruction::LongToFloat => opcode(opcodes::L2F)?,
