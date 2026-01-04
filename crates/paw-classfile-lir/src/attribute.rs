@@ -716,12 +716,89 @@ impl CodeAttribute {
 }
 
 #[derive(Debug, Clone)]
+pub struct SameFrameType(u8);
+
+impl SameFrameType {
+	pub fn new(frame_type: u8) -> Result<Self> {
+		if frame_type > 63 {
+			bail!("Invalid SameFrame tag: {}", frame_type);
+		}
+		Ok(Self(frame_type))
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct SameLocals1StackItemFrameType(u8);
+
+impl SameLocals1StackItemFrameType {
+	pub fn new(frame_type: u8) -> Result<Self> {
+		if frame_type > 127 || frame_type < 64 {
+			bail!("Invalid SameLocals1StackItemFrame tag: {}", frame_type);
+		}
+		Ok(Self(frame_type))
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct ChopFrameAbsentLocals(u8);
+
+impl ChopFrameAbsentLocals {
+	pub fn new(absent_locals: u8) -> Result<Self> {
+		if absent_locals < 1 || absent_locals > 3 {
+			bail!("Invalid ChopFrame absent locals count: {}", absent_locals);
+		}
+		Ok(Self(absent_locals))
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct AppendFrameLocals(Vec<VerificationTypeInfo>);
+
+impl AppendFrameLocals {
+	#[must_use]
+	pub const fn new() -> Self {
+		Self(Vec::new())
+	}
+
+	pub fn from_vec(locals: Vec<VerificationTypeInfo>) -> Result<Self> {
+		// The frame type append_frame is represented by tags in the range [252-254].
+		// This frame type indicates that the frame has the same locals as the previous frame except that k additional locals are defined,
+		// and that the operand stack is empty. The value of k is given by the formula frame_type - 251.
+		// The offset_delta value for the frame is given explicitly.
+		if locals.len() > 3 {
+			bail!("AppendFrame locals count is too large (max 3): {}", locals.len());
+		}
+
+		Ok(Self(locals))
+	}
+
+	pub fn push(&mut self, local: VerificationTypeInfo) -> Result<()> {
+		if self.0.len() >= 3 {
+			bail!("AppendFrame locals count is already at maximum (3)");
+		}
+		self.0.push(local);
+		Ok(())
+	}
+
+	#[must_use]
+	pub fn into_vec(self) -> Vec<VerificationTypeInfo> {
+		self.0
+	}
+}
+
+impl Default for AppendFrameLocals {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+#[derive(Debug, Clone)]
 pub enum StackMapFrame {
 	SameFrame {
-		frame_type: u8,
+		frame_type: SameFrameType,
 	},
 	SameLocals1StackItemFrame {
-		frame_type: u8,
+		frame_type: SameLocals1StackItemFrameType,
 		stack: VerificationTypeInfo,
 	},
 	SameLocals1StackItemFrameExtended {
@@ -729,7 +806,7 @@ pub enum StackMapFrame {
 		stack: VerificationTypeInfo,
 	},
 	ChopFrame {
-		chop_locals: u8,
+		absent_locals_count: ChopFrameAbsentLocals,
 		offset_delta: u16,
 	},
 	SameFrameExtended {
@@ -737,7 +814,7 @@ pub enum StackMapFrame {
 	},
 	AppendFrame {
 		offset_delta: u16,
-		locals: Vec<VerificationTypeInfo>,
+		locals: AppendFrameLocals,
 	},
 	FullFrame {
 		offset_delta: u16,
@@ -750,8 +827,13 @@ impl StackMapFrame {
 	#[must_use]
 	pub const fn offset_delta(&self) -> u16 {
 		match self {
-			StackMapFrame::SameFrame { frame_type } => *frame_type as u16,
-			StackMapFrame::SameLocals1StackItemFrame { frame_type, .. } => *frame_type as u16 - 64,
+			StackMapFrame::SameFrame {
+				frame_type: SameFrameType(frame_type),
+			} => *frame_type as u16,
+			StackMapFrame::SameLocals1StackItemFrame {
+				frame_type: SameLocals1StackItemFrameType(frame_type),
+				..
+			} => *frame_type as u16 - 64,
 			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, .. }
 			| StackMapFrame::ChopFrame { offset_delta, .. }
 			| StackMapFrame::SameFrameExtended { offset_delta, .. }
@@ -763,9 +845,11 @@ impl StackMapFrame {
 	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let frame_type = buffer.read_u8()?;
 		let frame = match frame_type {
-			0..=63 => Self::SameFrame { frame_type },
+			0..=63 => Self::SameFrame {
+				frame_type: SameFrameType::new(frame_type)?,
+			},
 			64..=127 => Self::SameLocals1StackItemFrame {
-				frame_type,
+				frame_type: SameLocals1StackItemFrameType::new(frame_type)?,
 				stack: VerificationTypeInfo::parse(buffer, cp)?,
 			},
 			247 => Self::SameLocals1StackItemFrameExtended {
@@ -778,7 +862,7 @@ impl StackMapFrame {
 				   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
 				   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
 				*/
-				chop_locals: 251 - frame_type,
+				absent_locals_count: ChopFrameAbsentLocals::new(251 - frame_type)?,
 				offset_delta: buffer.read_u16::<BigEndian>()?,
 			},
 			251 => Self::SameFrameExtended {
@@ -789,7 +873,10 @@ impl StackMapFrame {
 
 				let n_locals = (frame_type - 251) as usize;
 				let locals = buffer.read_vec_with(n_locals, |b| VerificationTypeInfo::parse(b, cp))?;
-				Self::AppendFrame { offset_delta, locals }
+				Self::AppendFrame {
+					offset_delta,
+					locals: AppendFrameLocals::from_vec(locals)?,
+				}
 			}
 			255 => {
 				let offset_delta = buffer.read_u16::<BigEndian>()?;
@@ -819,16 +906,10 @@ impl StackMapFrame {
 	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
 		match self {
 			StackMapFrame::SameFrame { frame_type } => {
-				if *frame_type > 63 {
-					bail!("Invalid SameFrame tag: {}", frame_type);
-				}
-				info.write_u8(*frame_type)?;
+				info.write_u8(frame_type.0)?;
 			}
 			StackMapFrame::SameLocals1StackItemFrame { frame_type, stack } => {
-				if !(64..=127).contains(frame_type) {
-					bail!("Invalid SameLocals1StackItemFrame tag: {}", frame_type);
-				}
-				info.write_u8(*frame_type)?;
+				info.write_u8(frame_type.0)?;
 				stack.write(cp, info)?;
 			}
 			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, stack } => {
@@ -837,22 +918,18 @@ impl StackMapFrame {
 				stack.write(cp, info)?;
 			}
 			StackMapFrame::ChopFrame {
-				chop_locals,
+				absent_locals_count: ChopFrameAbsentLocals(absent_locals_count),
 				offset_delta,
 			} => {
-				// frame_type = 251 - k
-				// k is chop_locals
+				/*
+				   The frame type chop_frame is represented by tags in the range [248-250]. If the frame_type is chop_frame,-
+				   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
+				   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
+				*/
 				let frame_type = 251_u8
-					.checked_sub(*chop_locals)
-					.ok_or_else(|| eyre::eyre!("Invalid chop_locals: {}", chop_locals))?;
+					.checked_sub(*absent_locals_count)
+					.ok_or_else(|| eyre::eyre!("Invalid chopframe absent locals count: {}", absent_locals_count))?;
 
-				if !(248..=250).contains(&frame_type) {
-					bail!(
-						"Invalid ChopFrame calculation (chop_locals={}): result tag {}",
-						chop_locals,
-						frame_type
-					);
-				}
 				info.write_u8(frame_type)?;
 				info.write_u16::<BigEndian>(*offset_delta)?;
 			}
@@ -860,16 +937,18 @@ impl StackMapFrame {
 				info.write_u8(251)?;
 				info.write_u16::<BigEndian>(*offset_delta)?;
 			}
-			StackMapFrame::AppendFrame { offset_delta, locals } => {
+			StackMapFrame::AppendFrame {
+				offset_delta,
+				locals: AppendFrameLocals(locals),
+			} => {
 				let n_locals = locals.len().truncate::<u8>();
 				let frame_type = 251 + n_locals;
-				if !(252..=254).contains(&frame_type) {
-					bail!(
-						"Invalid AppendFrame locals count ({}): result tag {}",
-						n_locals,
-						frame_type
-					);
-				}
+				debug_assert!(
+					frame_type >= 252 && frame_type <= 254,
+					"Invalid AppendFrame frame_type: {}",
+					frame_type
+				);
+
 				info.write_u8(frame_type)?;
 				info.write_u16::<BigEndian>(*offset_delta)?;
 				for local in locals {

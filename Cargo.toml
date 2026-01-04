@@ -23,6 +23,7 @@ missing-panics-doc = "allow"
 upper_case_acronyms = "allow"
 uninlined_format_args = "allow" # if there was inlined_format_args = "forbid" i would >:c
 verbose_bit_mask = "allow" # literally just harder to read
+manual_range_contains = "allow" # stupid lint
 
 # On positive comparisons this is good!
 # On negative ones it makes skimming harder
