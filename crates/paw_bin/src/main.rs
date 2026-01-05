@@ -283,9 +283,8 @@ fn recompile_jar(path: &Path) -> Result<()> {
 			let cursor = Cursor::new(buffer);
 			match ClassFile::read(&mut Cursor::new(cursor.get_ref())) {
 				Ok(cf) => {
-					let lir = LIRClass::parse(cf)?;
 					let mut lir_bytes = Vec::new();
-					lir.to_class_file()?.write(&mut lir_bytes)?;
+					cf.write(&mut lir_bytes)?;
 					zip_out.write_all(&lir_bytes)?;
 				}
 				Err(_) => {
