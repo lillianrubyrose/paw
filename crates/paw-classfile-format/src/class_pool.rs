@@ -11,8 +11,13 @@ use crate::{
 	ext::ReadBytesExt,
 };
 
+pub enum CPEntry {
+	Tag(CPTag),
+	Padding,
+}
+
 pub struct ConstantPool {
-	tags: Vec<CPTag>,
+	tags: Vec<CPEntry>,
 }
 
 // FIXME: newtype this for actual type safety
@@ -24,11 +29,18 @@ pub enum ConstantPoolIndexErr {
 	IndexOutOfRange(ConstantPoolIndex, usize),
 	#[error("expected tag of kind {1} at index {0}, found {2} instead")]
 	InvalidType(ConstantPoolIndex, &'static str, &'static str),
+	#[error("index {0} is a padding entry for a preceding wide entry")]
+	PaddingEntry(ConstantPoolIndex),
 	#[error(transparent)]
 	InvalidDescriptor(#[from] DescriptorParseErr),
 }
 
 impl ConstantPool {
+	#[must_use]
+	pub const fn new() -> Self {
+		Self { tags: Vec::new() }
+	}
+
 	#[must_use]
 	pub fn len(&self) -> usize {
 		self.tags.len()
@@ -40,16 +52,18 @@ impl ConstantPool {
 	}
 
 	pub fn get_tag(&self, idx: ConstantPoolIndex) -> Result<&CPTag, ConstantPoolIndexErr> {
-		self.tags
+		match self
+			.tags
 			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))
+			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?
+		{
+			CPEntry::Tag(tag) => Ok(tag),
+			CPEntry::Padding => Err(ConstantPoolIndexErr::PaddingEntry(idx)),
+		}
 	}
 
 	pub fn get_utf8(&self, idx: ConstantPoolIndex) -> Result<String, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Utf8(tag) => Ok(tag.value.clone()),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Utf8", tag.name())),
@@ -57,10 +71,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_integer(&self, idx: ConstantPoolIndex) -> Result<u32, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Integer(tag) => Ok(*tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Int", tag.name())),
@@ -68,10 +79,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_float(&self, idx: ConstantPoolIndex) -> Result<f32, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Float(tag) => Ok(*tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Float", tag.name())),
@@ -79,10 +87,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_long(&self, idx: ConstantPoolIndex) -> Result<u64, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Long(tag) => Ok(*tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Long", tag.name())),
@@ -90,10 +95,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_double(&self, idx: ConstantPoolIndex) -> Result<f64, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Double(tag) => Ok(*tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Double", tag.name())),
@@ -101,10 +103,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_class(&self, idx: ConstantPoolIndex) -> Result<&ClassTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Class(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Class", tag.name())),
@@ -117,10 +116,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_string(&self, idx: ConstantPoolIndex) -> Result<&StringTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::String(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "String", tag.name())),
@@ -132,10 +128,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_field_ref(&self, idx: ConstantPoolIndex) -> Result<&FieldRefTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::FieldRef(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "FieldRef", tag.name())),
@@ -143,10 +136,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_method_ref(&self, idx: ConstantPoolIndex) -> Result<&MethodRefTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::MethodRef(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "MethodRef", tag.name())),
@@ -157,10 +147,7 @@ impl ConstantPool {
 		&self,
 		idx: ConstantPoolIndex,
 	) -> Result<&InterfaceMethodRefTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::InterfaceMethodRef(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "InterfaceMethodRef", tag.name())),
@@ -168,10 +155,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_name_and_type(&self, idx: ConstantPoolIndex) -> Result<&NameAndTypeTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::NameAndType(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "NameAndType", tag.name())),
@@ -197,10 +181,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_method_handle(&self, idx: ConstantPoolIndex) -> Result<&MethodHandleTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::MethodHandle(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "MethodHandle", tag.name())),
@@ -208,10 +189,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_method_type(&self, idx: ConstantPoolIndex) -> Result<&MethodTypeTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::MethodType(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "MethodType", tag.name())),
@@ -219,10 +197,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_invoke_dynamic(&self, idx: ConstantPoolIndex) -> Result<&InvokeDynamicTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::InvokeDynamic(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "InvokeDynamic", tag.name())),
@@ -230,10 +205,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_module(&self, idx: ConstantPoolIndex) -> Result<&ModuleTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Module(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Module", tag.name())),
@@ -246,10 +218,7 @@ impl ConstantPool {
 	}
 
 	pub fn get_package(&self, idx: ConstantPoolIndex) -> Result<&PackageTag, ConstantPoolIndexErr> {
-		let tag = self
-			.tags
-			.get(idx as usize - 1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
+		let tag = self.get_tag(idx)?;
 		match tag {
 			CPTag::Package(tag) => Ok(tag),
 			tag => Err(ConstantPoolIndexErr::InvalidType(idx, "Package", tag.name())),
@@ -260,22 +229,253 @@ impl ConstantPool {
 		let name = self.get_utf8(tag.name_index)?;
 		Ok(name)
 	}
+
+	pub fn push(&mut self, tag: CPTag) -> u16 {
+		self.tags.push(CPEntry::Tag(tag));
+		self.len().truncate()
+	}
+
+	pub fn add_utf8(&mut self, val: String) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Utf8(t)) if t.value == val))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Utf8(Utf8Tag { value: val }))
+	}
+
+	pub fn add_class(&mut self, name: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Class(t)) if t.name_index == name_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Class(ClassTag { name_index }))
+	}
+
+	pub fn add_string(&mut self, val: String) -> u16 {
+		let utf8_index = self.add_utf8(val);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::String(t)) if t.utf8_index == utf8_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::String(StringTag { utf8_index }))
+	}
+
+	pub fn add_integer(&mut self, val: u32) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Integer(v)) if *v == val))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Integer(val))
+	}
+
+	pub fn add_float(&mut self, val: f32) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Float(v)) if v.eq(&val)))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Float(val))
+	}
+
+	pub fn add_long(&mut self, val: u64) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Long(v)) if *v == val))
+		{
+			return (idx + 1).truncate();
+		}
+		let idx = self.push(CPTag::Long(val));
+		self.tags.push(CPEntry::Padding);
+		idx
+	}
+
+	pub fn add_double(&mut self, val: f64) -> u16 {
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Double(v)) if v.eq(&val)))
+		{
+			return (idx + 1).truncate();
+		}
+		let idx = self.push(CPTag::Double(val));
+		self.tags.push(CPEntry::Padding);
+		idx
+	}
+
+	pub fn add_name_and_type(&mut self, name: String, descriptor: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		let descriptor_index = self.add_utf8(descriptor);
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPEntry::Tag(CPTag::NameAndType(t)) if t.name_index == name_index && t.descriptor_index == descriptor_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::NameAndType(NameAndTypeTag {
+			name_index,
+			descriptor_index,
+		}))
+	}
+
+	pub fn add_field_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+		let class_index = self.add_class(class);
+		let name_and_ty_index = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPEntry::Tag(CPTag::FieldRef(t)) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::FieldRef(FieldRefTag {
+			class_index,
+			name_and_ty_index,
+		}))
+	}
+
+	pub fn add_method_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+		let class_index = self.add_class(class);
+		let name_and_ty_index = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPEntry::Tag(CPTag::MethodRef(t)) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::MethodRef(MethodRefTag {
+			class_index,
+			name_and_ty_index,
+		}))
+	}
+
+	pub fn add_interface_method_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+		let class_index = self.add_class(class);
+		let name_and_ty_index = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(|t| matches!(t, CPEntry::Tag(CPTag::InterfaceMethodRef(t)) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index)) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
+			class_index,
+			name_and_ty_index,
+		}))
+	}
+
+	pub fn add_method_handle(&mut self, kind: u8, reference_index: u16) -> u16 {
+		if let Some(idx) = self.tags.iter().position(
+			|t| matches!(t, CPEntry::Tag(CPTag::MethodHandle(t)) if t.reference_kind == kind && t.reference_index == reference_index),
+		) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::MethodHandle(MethodHandleTag {
+			reference_kind: kind,
+			reference_index,
+		}))
+	}
+
+	pub fn add_method_type(&mut self, descriptor: String) -> u16 {
+		let descriptor_index = self.add_utf8(descriptor);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::MethodType(t)) if t.descriptor_index == descriptor_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::MethodType(MethodTypeTag { descriptor_index }))
+	}
+
+	pub fn add_invoke_dynamic(&mut self, bsm_attr_idx: u16, name: String, descriptor: String) -> u16 {
+		let name_and_ty_idx = self.add_name_and_type(name, descriptor);
+		if let Some(idx) = self.tags.iter().position(|t| {
+			matches!(t, CPEntry::Tag(CPTag::InvokeDynamic(t))
+                if t.bootstrap_method_attr_index == bsm_attr_idx
+                && t.name_and_ty_index == name_and_ty_idx)
+		}) {
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::InvokeDynamic(InvokeDynamicTag {
+			bootstrap_method_attr_index: bsm_attr_idx,
+			name_and_ty_index: name_and_ty_idx,
+		}))
+	}
+
+	pub fn add_module(&mut self, name: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Module(t)) if t.name_index == name_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Module(ModuleTag { name_index }))
+	}
+
+	pub fn add_package(&mut self, name: String) -> u16 {
+		let name_index = self.add_utf8(name);
+		if let Some(idx) = self
+			.tags
+			.iter()
+			.position(|t| matches!(t, CPEntry::Tag(CPTag::Package(t)) if t.name_index == name_index))
+		{
+			return (idx + 1).truncate();
+		}
+		self.push(CPTag::Package(PackageTag { name_index }))
+	}
+}
+
+impl Default for ConstantPool {
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 // Read/Write
 impl ConstantPool {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
-		let cp_count = usize::from(buffer.read_u16::<BigEndian>()? - 1);
-		let tags = buffer.read_vec_with(cp_count, |b| CPTag::read(b))?;
+		let cp_count = buffer.read_u16::<BigEndian>()?;
+		if cp_count == 0 {
+			return Ok(Self::new());
+		}
+
+		let mut tags = Vec::with_capacity((cp_count - 1) as usize);
+		let mut i = 1;
+		while i < cp_count {
+			let tag = CPTag::read(buffer)?;
+			let is_wide = matches!(tag, CPTag::Long(_) | CPTag::Double(_));
+			tags.push(CPEntry::Tag(tag));
+			i += 1;
+
+			if is_wide {
+				tags.push(CPEntry::Padding);
+				i += 1;
+			}
+		}
+
 		Ok(Self { tags })
 	}
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		let len = self.tags.len();
+		let len = self.tags.len() + 1;
 		debug_assert!(u16::try_from(len).is_ok(), "class has too many constants");
 		buffer.write_u16::<BigEndian>(len.truncate())?;
-		for tag in self.tags.iter() {
-			tag.write(buffer)?;
+		for entry in self.tags.iter() {
+			match entry {
+				CPEntry::Tag(tag) => tag.write(buffer)?,
+				CPEntry::Padding => {}
+			}
 		}
 		Ok(())
 	}

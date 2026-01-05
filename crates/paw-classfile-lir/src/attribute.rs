@@ -1,8 +1,9 @@
 use std::{collections::HashMap, io::Cursor};
 
 use bytemuck::AnyBitPattern;
-use byteorder::BigEndian;
+use byteorder::{BigEndian, WriteBytesExt};
 use eyre::{Context, Result, bail};
+use num_conv::Truncate;
 use paw_classfile_format::{
 	AttributeInfo, CPTag, InnerClassAccessFlags, ModuleAccessFlags, ModuleExportAccessFlags, ModuleOpenAccessFlags,
 	ModuleRequireAccessFlags, ParameterAccessFlags,
@@ -13,7 +14,7 @@ use paw_classfile_format::{
 
 use crate::{
 	instruction::{Instruction, LIRLabel, LIRResolvedLabel},
-	method::LIRMethodHandle,
+	method::{LIRHandleDescriptor, LIRMethodHandle},
 };
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,32 @@ pub enum LIRClassAttribute {
 }
 
 impl LIRClassAttribute {
+	#[must_use]
+	pub fn name(&self) -> &str {
+		match self {
+			LIRClassAttribute::SourceFile(..) => "SourceFile",
+			LIRClassAttribute::InnerClasses(..) => "InnerClasses",
+			LIRClassAttribute::EnclosingMethod(..) => "EnclosingMethod",
+			LIRClassAttribute::SourceDebugExtension(..) => "SourceDebugExtension",
+			LIRClassAttribute::BootstrapMethods(..) => "BootstrapMethods",
+			LIRClassAttribute::Module(..) => "Module",
+			LIRClassAttribute::ModulePackages(..) => "ModulePackages",
+			LIRClassAttribute::ModuleMainClass(..) => "ModuleMainClass",
+			LIRClassAttribute::NestHost(..) => "NestHost",
+			LIRClassAttribute::NestMembers(..) => "NestMembers",
+			LIRClassAttribute::Record(..) => "Record",
+			LIRClassAttribute::PermittedSubclasses(..) => "PermittedSubclasses",
+			LIRClassAttribute::Synthetic => "Synthetic",
+			LIRClassAttribute::Deprecated => "Deprecated",
+			LIRClassAttribute::Signature(..) => "Signature",
+			LIRClassAttribute::RuntimeVisibleAnnotations(..) => "RuntimeVisibleAnnotations",
+			LIRClassAttribute::RuntimeInvisibleAnnotations(..) => "RuntimeInvisibleAnnotations",
+			LIRClassAttribute::RuntimeVisibleTypeAnnotations(..) => "RuntimeVisibleTypeAnnotations",
+			LIRClassAttribute::RuntimeInvisibleTypeAnnotations(..) => "RuntimeInvisibleTypeAnnotations",
+			LIRClassAttribute::Unknown(name) => name.as_str(),
+		}
+	}
+
 	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
 
@@ -90,6 +117,68 @@ impl LIRClassAttribute {
 			bail!("{} extra attribute bytes in {} class attribute data", remaining, name);
 		}
 		Ok(kind)
+	}
+
+	pub fn write(&self, cp: &mut ConstantPool) -> Result<AttributeInfo> {
+		let name = self.name();
+		let attribute_name_index = cp.add_utf8(name.to_string());
+		let mut info = Vec::new();
+
+		match self {
+			LIRClassAttribute::SourceFile(s) => {
+				s.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::InnerClasses(ic) => {
+				ic.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::EnclosingMethod(em) => {
+				em.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::SourceDebugExtension(sde) => {
+				sde.write(&mut info)?;
+			}
+			LIRClassAttribute::BootstrapMethods(bsm) => {
+				bsm.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::Module(m) => {
+				m.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::ModulePackages(mp) => {
+				mp.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::ModuleMainClass(mc) => {
+				mc.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::NestHost(nh) => {
+				nh.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::NestMembers(nm) => {
+				nm.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::Record(r) => {
+				r.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::PermittedSubclasses(ps) => {
+				ps.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::Synthetic | LIRClassAttribute::Deprecated => {}
+			LIRClassAttribute::Signature(sig) => {
+				sig.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::RuntimeVisibleAnnotations(ra) | LIRClassAttribute::RuntimeInvisibleAnnotations(ra) => {
+				ra.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::RuntimeVisibleTypeAnnotations(rta)
+			| LIRClassAttribute::RuntimeInvisibleTypeAnnotations(rta) => {
+				rta.write(cp, &mut info)?;
+			}
+			LIRClassAttribute::Unknown(_) => unreachable!("Class Attribute 'Unknown' should never be written"),
+		}
+
+		Ok(AttributeInfo {
+			attribute_name_index,
+			info,
+		})
 	}
 }
 
@@ -163,7 +252,6 @@ pub enum LIRMethodAttribute {
 impl LIRMethodAttribute {
 	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool, class_attrs: &[LIRClassAttribute]) -> Result<Self> {
 		let name = cp.get_utf8(raw.attribute_name_index)?;
-
 		let mut buffer = raw.info.as_slice();
 		let kind = match name.as_ref() {
 			"Code" => LIRMethodAttribute::Code(CodeAttribute::parse(&mut buffer, cp, class_attrs)?),
@@ -252,6 +340,45 @@ impl LIRCodeAttribute {
 		}
 		Ok(kind)
 	}
+
+	pub fn write(&self, cp: &mut ConstantPool) -> Result<AttributeInfo> {
+		let name = match self {
+			LIRCodeAttribute::LineNumberTable(..) => "LineNumberTable",
+			LIRCodeAttribute::LocalVariableTable(..) => "LocalVariableTable",
+			LIRCodeAttribute::LocalVariableTypeTable(..) => "LocalVariableTypeTable",
+			LIRCodeAttribute::StackMapTable(..) => "StackMapTable",
+			LIRCodeAttribute::RuntimeVisibleTypeAnnotations(..) => "RuntimeVisibleTypeAnnotations",
+			LIRCodeAttribute::RuntimeInvisibleTypeAnnotations(..) => "RuntimeInvisibleTypeAnnotations",
+			LIRCodeAttribute::Unknown(_) => unreachable!("Code attribute 'Unknown' should never be written"),
+		};
+		let attribute_name_index = cp.add_utf8(name.to_string());
+		let mut info = Vec::new();
+
+		match self {
+			LIRCodeAttribute::LineNumberTable(lnt) => {
+				lnt.write(&mut info)?;
+			}
+			LIRCodeAttribute::LocalVariableTable(lvt) => {
+				lvt.write(cp, &mut info)?;
+			}
+			LIRCodeAttribute::LocalVariableTypeTable(lvtt) => {
+				lvtt.write(cp, &mut info)?;
+			}
+			LIRCodeAttribute::StackMapTable(smt) => {
+				smt.write(cp, &mut info)?;
+			}
+			LIRCodeAttribute::RuntimeVisibleTypeAnnotations(rta)
+			| LIRCodeAttribute::RuntimeInvisibleTypeAnnotations(rta) => {
+				rta.write(cp, &mut info)?;
+			}
+			LIRCodeAttribute::Unknown(_) => unreachable!(),
+		}
+
+		Ok(AttributeInfo {
+			attribute_name_index,
+			info,
+		})
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +422,41 @@ impl LIRRecordComponentAttribute {
 		}
 		Ok(kind)
 	}
+
+	pub fn write(&self, cp: &mut ConstantPool) -> Result<AttributeInfo> {
+		let name = match self {
+			LIRRecordComponentAttribute::Signature(_) => "Signature",
+			LIRRecordComponentAttribute::RuntimeVisibleAnnotations(_) => "RuntimeVisibleAnnotations",
+			LIRRecordComponentAttribute::RuntimeInvisibleAnnotations(_) => "RuntimeInvisibleAnnotations",
+			LIRRecordComponentAttribute::RuntimeVisibleTypeAnnotations(_) => "RuntimeVisibleTypeAnnotations",
+			LIRRecordComponentAttribute::RuntimeInvisibleTypeAnnotations(_) => "RuntimeInvisibleTypeAnnotations",
+			LIRRecordComponentAttribute::Unknown(_) => unreachable!("Code attribute 'Unknown' should never be written"),
+		};
+		let attribute_name_index = cp.add_utf8(name.to_string());
+		let mut info = Vec::new();
+
+		match self {
+			LIRRecordComponentAttribute::Signature(s) => {
+				s.write(cp, &mut info)?;
+			}
+			LIRRecordComponentAttribute::RuntimeVisibleAnnotations(ra)
+			| LIRRecordComponentAttribute::RuntimeInvisibleAnnotations(ra) => {
+				ra.write(cp, &mut info)?;
+			}
+			LIRRecordComponentAttribute::RuntimeVisibleTypeAnnotations(rta)
+			| LIRRecordComponentAttribute::RuntimeInvisibleTypeAnnotations(rta) => {
+				rta.write(cp, &mut info)?;
+			}
+			LIRRecordComponentAttribute::Unknown(_) => {
+				unreachable!("Record component attribute 'Unknown' cannot be written")
+			}
+		}
+
+		Ok(AttributeInfo {
+			attribute_name_index,
+			info,
+		})
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -322,14 +484,37 @@ impl ConstantValueAttribute {
 		};
 		Ok(value)
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let idx = match self {
+			ConstantValueAttribute::Int(v) => cp.add_integer(v.cast_unsigned()),
+			ConstantValueAttribute::Float(v) => cp.add_float(*v),
+			ConstantValueAttribute::Long(v) => cp.add_long(v.cast_unsigned()),
+			ConstantValueAttribute::Double(v) => cp.add_double(*v),
+			ConstantValueAttribute::String(v) => cp.add_string(v.clone()),
+		};
+		info.write_u16::<BigEndian>(idx)?;
+		Ok(())
+	}
 }
 
-#[derive(Debug, Clone, Copy, AnyBitPattern)]
+#[derive(Debug, Clone)]
 pub struct CodeAttributeException {
 	pub start_pc: u16,
 	pub end_pc: u16,
 	pub handler_pc: u16,
-	pub catch_type: u16,
+	pub catch_type: Option<String>, // ClassRef
+}
+
+impl CodeAttributeException {
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let idx = self.catch_type.as_ref().map_or(0, |t| cp.add_class(t.clone()));
+		info.write_u16::<BigEndian>(self.start_pc)?;
+		info.write_u16::<BigEndian>(self.end_pc)?;
+		info.write_u16::<BigEndian>(self.handler_pc)?;
+		info.write_u16::<BigEndian>(idx)?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -376,9 +561,17 @@ impl CodeAttribute {
 				handler_pc: reader
 					.read_u16::<BigEndian>()
 					.wrap_err("failed to read exception_table handler_pc from Code attribute")?,
-				catch_type: reader
-					.read_u16::<BigEndian>()
-					.wrap_err("failed to read exception_table catch_type from Code attribute")?,
+				catch_type: {
+					let idx = reader
+						.read_u16::<BigEndian>()
+						.wrap_err("failed to read exception_table catch_type from Code attribute")?;
+					if idx == 0 {
+						None
+					} else {
+						let class = cp.get_class(idx)?;
+						Some(cp.resolve_class_name(class)?)
+					}
+				},
 			})
 		})?;
 		let attrs_count = usize::from(
@@ -422,7 +615,6 @@ impl CodeAttribute {
 		for (_, inst, _) in &mut code {
 			match inst {
 				Instruction::Goto { target }
-				| Instruction::GotoW { target }
 				| Instruction::IfEq { target }
 				| Instruction::IfNe { target }
 				| Instruction::IfLt { target }
@@ -439,8 +631,7 @@ impl CodeAttribute {
 				| Instruction::IfACmpNe { target }
 				| Instruction::IfNull { target }
 				| Instruction::IfNonNull { target }
-				| Instruction::Jsr { target }
-				| Instruction::JsrW { target } => {
+				| Instruction::Jsr { target } => {
 					resolve_unresolved_label(target);
 				}
 
@@ -483,15 +674,131 @@ impl CodeAttribute {
 			attributes,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		bsm_pool: &[BootstrapMethod],
+	) -> Result<()> {
+		info.write_u16::<BigEndian>(self.max_stack)?;
+		info.write_u16::<BigEndian>(self.max_locals)?;
+
+		let mut label_map = HashMap::new();
+		for (pc, _, labels) in &self.code {
+			for label in labels {
+				if let LIRLabel::Resolved(r) = label {
+					label_map.insert(*r, *pc);
+				}
+			}
+		}
+
+		let mut code_buf = Vec::new();
+		for (pc, inst, _) in &self.code {
+			inst.write(&mut code_buf, cp, *pc, &label_map, bsm_pool)?;
+		}
+		#[allow(clippy::cast_possible_truncation, reason = "aaaa")]
+		info.write_u32::<BigEndian>(code_buf.len() as u32)?;
+		info.write_all(&code_buf)?;
+
+		info.write_u16::<BigEndian>(self.exception_table.len().truncate())?;
+		for exc in &self.exception_table {
+			exc.write(cp, info)?;
+		}
+
+		info.write_u16::<BigEndian>(self.attributes.len().truncate())?;
+		for attr in &self.attributes {
+			attr.write(cp)?.write(info)?;
+		}
+
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct SameFrameType(u8);
+
+impl SameFrameType {
+	pub fn new(frame_type: u8) -> Result<Self> {
+		if frame_type > 63 {
+			bail!("Invalid SameFrame tag: {}", frame_type);
+		}
+		Ok(Self(frame_type))
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct SameLocals1StackItemFrameType(u8);
+
+impl SameLocals1StackItemFrameType {
+	pub fn new(frame_type: u8) -> Result<Self> {
+		if frame_type > 127 || frame_type < 64 {
+			bail!("Invalid SameLocals1StackItemFrame tag: {}", frame_type);
+		}
+		Ok(Self(frame_type))
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct ChopFrameAbsentLocals(u8);
+
+impl ChopFrameAbsentLocals {
+	pub fn new(absent_locals: u8) -> Result<Self> {
+		if absent_locals < 1 || absent_locals > 3 {
+			bail!("Invalid ChopFrame absent locals count: {}", absent_locals);
+		}
+		Ok(Self(absent_locals))
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct AppendFrameLocals(Vec<VerificationTypeInfo>);
+
+impl AppendFrameLocals {
+	#[must_use]
+	pub const fn new() -> Self {
+		Self(Vec::new())
+	}
+
+	pub fn from_vec(locals: Vec<VerificationTypeInfo>) -> Result<Self> {
+		// The frame type append_frame is represented by tags in the range [252-254].
+		// This frame type indicates that the frame has the same locals as the previous frame except that k additional locals are defined,
+		// and that the operand stack is empty. The value of k is given by the formula frame_type - 251.
+		// The offset_delta value for the frame is given explicitly.
+		if locals.len() > 3 {
+			bail!("AppendFrame locals count is too large (max 3): {}", locals.len());
+		}
+
+		Ok(Self(locals))
+	}
+
+	pub fn push(&mut self, local: VerificationTypeInfo) -> Result<()> {
+		if self.0.len() >= 3 {
+			bail!("AppendFrame locals count is already at maximum (3)");
+		}
+		self.0.push(local);
+		Ok(())
+	}
+
+	#[must_use]
+	pub fn into_vec(self) -> Vec<VerificationTypeInfo> {
+		self.0
+	}
+}
+
+impl Default for AppendFrameLocals {
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 #[derive(Debug, Clone)]
 pub enum StackMapFrame {
 	SameFrame {
-		frame_type: u8,
+		frame_type: SameFrameType,
 	},
 	SameLocals1StackItemFrame {
-		frame_type: u8,
+		frame_type: SameLocals1StackItemFrameType,
 		stack: VerificationTypeInfo,
 	},
 	SameLocals1StackItemFrameExtended {
@@ -499,7 +806,7 @@ pub enum StackMapFrame {
 		stack: VerificationTypeInfo,
 	},
 	ChopFrame {
-		chop_locals: u8,
+		absent_locals_count: ChopFrameAbsentLocals,
 		offset_delta: u16,
 	},
 	SameFrameExtended {
@@ -507,7 +814,7 @@ pub enum StackMapFrame {
 	},
 	AppendFrame {
 		offset_delta: u16,
-		locals: Vec<VerificationTypeInfo>,
+		locals: AppendFrameLocals,
 	},
 	FullFrame {
 		offset_delta: u16,
@@ -520,8 +827,13 @@ impl StackMapFrame {
 	#[must_use]
 	pub const fn offset_delta(&self) -> u16 {
 		match self {
-			StackMapFrame::SameFrame { frame_type } => *frame_type as u16,
-			StackMapFrame::SameLocals1StackItemFrame { frame_type, .. } => *frame_type as u16 - 64,
+			StackMapFrame::SameFrame {
+				frame_type: SameFrameType(frame_type),
+			} => *frame_type as u16,
+			StackMapFrame::SameLocals1StackItemFrame {
+				frame_type: SameLocals1StackItemFrameType(frame_type),
+				..
+			} => *frame_type as u16 - 64,
 			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, .. }
 			| StackMapFrame::ChopFrame { offset_delta, .. }
 			| StackMapFrame::SameFrameExtended { offset_delta, .. }
@@ -533,9 +845,11 @@ impl StackMapFrame {
 	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let frame_type = buffer.read_u8()?;
 		let frame = match frame_type {
-			0..=63 => Self::SameFrame { frame_type },
+			0..=63 => Self::SameFrame {
+				frame_type: SameFrameType::new(frame_type)?,
+			},
 			64..=127 => Self::SameLocals1StackItemFrame {
-				frame_type,
+				frame_type: SameLocals1StackItemFrameType::new(frame_type)?,
 				stack: VerificationTypeInfo::parse(buffer, cp)?,
 			},
 			247 => Self::SameLocals1StackItemFrameExtended {
@@ -548,7 +862,7 @@ impl StackMapFrame {
 				   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
 				   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
 				*/
-				chop_locals: 251 - frame_type,
+				absent_locals_count: ChopFrameAbsentLocals::new(251 - frame_type)?,
 				offset_delta: buffer.read_u16::<BigEndian>()?,
 			},
 			251 => Self::SameFrameExtended {
@@ -559,7 +873,10 @@ impl StackMapFrame {
 
 				let n_locals = (frame_type - 251) as usize;
 				let locals = buffer.read_vec_with(n_locals, |b| VerificationTypeInfo::parse(b, cp))?;
-				Self::AppendFrame { offset_delta, locals }
+				Self::AppendFrame {
+					offset_delta,
+					locals: AppendFrameLocals::from_vec(locals)?,
+				}
 			}
 			255 => {
 				let offset_delta = buffer.read_u16::<BigEndian>()?;
@@ -585,6 +902,78 @@ impl StackMapFrame {
 		};
 		Ok(frame)
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		match self {
+			StackMapFrame::SameFrame { frame_type } => {
+				info.write_u8(frame_type.0)?;
+			}
+			StackMapFrame::SameLocals1StackItemFrame { frame_type, stack } => {
+				info.write_u8(frame_type.0)?;
+				stack.write(cp, info)?;
+			}
+			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, stack } => {
+				info.write_u8(247)?;
+				info.write_u16::<BigEndian>(*offset_delta)?;
+				stack.write(cp, info)?;
+			}
+			StackMapFrame::ChopFrame {
+				absent_locals_count: ChopFrameAbsentLocals(absent_locals_count),
+				offset_delta,
+			} => {
+				/*
+				   The frame type chop_frame is represented by tags in the range [248-250]. If the frame_type is chop_frame,-
+				   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
+				   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
+				*/
+				let frame_type = 251_u8
+					.checked_sub(*absent_locals_count)
+					.ok_or_else(|| eyre::eyre!("Invalid chopframe absent locals count: {}", absent_locals_count))?;
+
+				info.write_u8(frame_type)?;
+				info.write_u16::<BigEndian>(*offset_delta)?;
+			}
+			StackMapFrame::SameFrameExtended { offset_delta } => {
+				info.write_u8(251)?;
+				info.write_u16::<BigEndian>(*offset_delta)?;
+			}
+			StackMapFrame::AppendFrame {
+				offset_delta,
+				locals: AppendFrameLocals(locals),
+			} => {
+				let n_locals = locals.len().truncate::<u8>();
+				let frame_type = 251 + n_locals;
+				debug_assert!(
+					frame_type >= 252 && frame_type <= 254,
+					"Invalid AppendFrame frame_type: {}",
+					frame_type
+				);
+
+				info.write_u8(frame_type)?;
+				info.write_u16::<BigEndian>(*offset_delta)?;
+				for local in locals {
+					local.write(cp, info)?;
+				}
+			}
+			StackMapFrame::FullFrame {
+				offset_delta,
+				locals,
+				stack,
+			} => {
+				info.write_u8(255)?;
+				info.write_u16::<BigEndian>(*offset_delta)?;
+				info.write_u16::<BigEndian>(locals.len().truncate())?;
+				for local in locals {
+					local.write(cp, info)?;
+				}
+				info.write_u16::<BigEndian>(stack.len().truncate())?;
+				for s in stack {
+					s.write(cp, info)?;
+				}
+			}
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -601,6 +990,14 @@ impl StackMapTableAttribute {
 		);
 		let entries = buffer.read_vec_with(entries_count, |b| StackMapFrame::parse(b, cp))?;
 		Ok(StackMapTableAttribute { entries })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.entries.len().truncate())?;
+		for entry in &self.entries {
+			entry.write(cp, info)?;
+		}
+		Ok(())
 	}
 }
 
@@ -623,6 +1020,15 @@ impl ExceptionsAttribute {
 			Ok(cp.resolve_class_name(cp.get_class(index)?)?)
 		})?;
 		Ok(Self { exception_classes })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.exception_classes.len().truncate())?;
+		for ele in &self.exception_classes {
+			let idx = cp.add_class(ele.clone());
+			info.write_u16::<BigEndian>(idx)?;
+		}
+		Ok(())
 	}
 }
 
@@ -660,6 +1066,25 @@ impl InnerClassesAttributeClass {
 			inner_class_access_flags,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let inner_info_idx = cp.add_class(self.inner_class_info.clone());
+		let outer_info_idx = if let Some(ref outer) = self.outer_class_info {
+			cp.add_class(outer.clone())
+		} else {
+			0
+		};
+		let inner_name_idx = if let Some(ref name) = self.inner_name {
+			cp.add_utf8(name.clone())
+		} else {
+			0
+		};
+		info.write_u16::<BigEndian>(inner_info_idx)?;
+		info.write_u16::<BigEndian>(outer_info_idx)?;
+		info.write_u16::<BigEndian>(inner_name_idx)?;
+		info.write_u16::<BigEndian>(self.inner_class_access_flags.bits())?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -677,13 +1102,21 @@ impl InnerClassesAttribute {
 		let classes = buffer.read_vec_with(n_classes, |b| InnerClassesAttributeClass::parse(b, cp))?;
 		Ok(InnerClassesAttribute { classes })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.classes.len().truncate())?;
+		for class in &self.classes {
+			class.write(cp, info)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
 pub struct EnclosingMethodAttribute {
 	pub class: String,
-	pub method_name: String,
-	pub method_descriptor: MethodDescriptor,
+	pub method_name: Option<String>,
+	pub method_descriptor: Option<MethodDescriptor>,
 }
 
 impl EnclosingMethodAttribute {
@@ -696,16 +1129,34 @@ impl EnclosingMethodAttribute {
 			.wrap_err("failed to read method_index from EnclosingMethod attribute")?;
 
 		let class = cp.resolve_class_name(cp.get_class(class_idx)?)?;
-
-		let method_name_and_ty = cp.get_name_and_type(method_idx)?;
-		let method_name = cp.get_utf8(method_name_and_ty.name_index)?;
-		let method_descriptor = cp.get_utf8(method_name_and_ty.descriptor_index)?.parse()?;
+		let (method_name, method_descriptor) = if method_idx == 0 {
+			(None, None)
+		} else {
+			let method_name_and_ty = cp.get_name_and_type(method_idx)?;
+			let method_name = cp.get_utf8(method_name_and_ty.name_index)?;
+			let method_descriptor = cp.get_utf8(method_name_and_ty.descriptor_index)?.parse()?;
+			(Some(method_name), Some(method_descriptor))
+		};
 
 		Ok(EnclosingMethodAttribute {
 			class,
 			method_name,
 			method_descriptor,
 		})
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let class_idx = cp.add_class(self.class.clone());
+		let method_name_and_ty = if let Some(method_name) = &self.method_name
+			&& let Some(method_desc) = &self.method_descriptor
+		{
+			cp.add_name_and_type(method_name.clone(), method_desc.jvm_repr())
+		} else {
+			0
+		};
+		info.write_u16::<BigEndian>(class_idx)?;
+		info.write_u16::<BigEndian>(method_name_and_ty)?;
+		Ok(())
 	}
 }
 
@@ -723,6 +1174,12 @@ impl SignatureAttribute {
 		let signature = cp.get_utf8(signature_index)?;
 		Ok(Self { signature })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let idx = cp.add_utf8(self.signature.clone());
+		info.write_u16::<BigEndian>(idx)?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -738,6 +1195,12 @@ impl SourceFileAttribute {
 		let source_file = cp.get_utf8(sourcefile_index)?;
 		Ok(Self { source_file })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let idx = cp.add_utf8(self.source_file.clone());
+		info.write_u16::<BigEndian>(idx)?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -751,6 +1214,12 @@ impl DebugExtensionAttribute {
 		let mut buf = Vec::new();
 		buffer.read_to_end(&mut buf)?;
 		Ok(Self { debug_data: buf })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.debug_data.len().truncate())?;
+		info.write_all(&self.debug_data)?;
+		Ok(())
 	}
 }
 
@@ -784,6 +1253,15 @@ impl LineNumberTableAttribute {
 		})?;
 		Ok(Self { table })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.table.len().truncate())?;
+		for ele in &self.table {
+			info.write_u16::<BigEndian>(ele.start_pc)?;
+			info.write_u16::<BigEndian>(ele.line_number)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -812,6 +1290,20 @@ impl LocalVariableTableEntry {
 			local_idx,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.start_pc)?;
+		info.write_u16::<BigEndian>(self.len)?;
+
+		let name_idx = cp.add_utf8(self.name.clone());
+		info.write_u16::<BigEndian>(name_idx)?;
+
+		let descriptor_idx = cp.add_utf8(self.descriptor.jvm_repr());
+		info.write_u16::<BigEndian>(descriptor_idx)?;
+
+		info.write_u16::<BigEndian>(self.local_idx)?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -828,6 +1320,14 @@ impl LocalVariableTableAttribute {
 		);
 		let table = buffer.read_vec_with(num_entries, |b| LocalVariableTableEntry::parse(b, cp))?;
 		Ok(Self { table })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.table.len().truncate())?;
+		for ele in &self.table {
+			ele.write(cp, info)?;
+		}
+		Ok(())
 	}
 }
 
@@ -858,6 +1358,20 @@ impl LocalVariableTypeTableEntry {
 			local_idx,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.start_pc)?;
+		info.write_u16::<BigEndian>(self.len)?;
+
+		let name_idx = cp.add_utf8(self.name.clone());
+		info.write_u16::<BigEndian>(name_idx)?;
+
+		let signature_idx = cp.add_utf8(self.signature.clone());
+		info.write_u16::<BigEndian>(signature_idx)?;
+
+		info.write_u16::<BigEndian>(self.local_idx)?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -870,6 +1384,14 @@ impl LocalVariableTypeTableAttribute {
 		let num_entries = usize::from(buffer.read_u16::<BigEndian>()?);
 		let table = buffer.read_vec_with(num_entries, |reader| LocalVariableTypeTableEntry::read(reader, cp))?;
 		Ok(Self { table })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.table.len().truncate())?;
+		for ele in &self.table {
+			ele.write(cp, info)?;
+		}
+		Ok(())
 	}
 }
 
@@ -928,6 +1450,46 @@ impl RuntimeAnnotationValue {
 			_ => bail!("invalid runtime annotation value tag: {tag}"),
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		match self {
+			RuntimeAnnotationValue::ConstValueIndex(c) => {
+				let (tag, idx) = match c {
+					ConstantValueAttribute::Int(v) => (b'I', cp.add_integer(v.cast_unsigned())),
+					ConstantValueAttribute::Float(v) => (b'F', cp.add_float(*v)),
+					ConstantValueAttribute::Long(v) => (b'J', cp.add_long(v.cast_unsigned())),
+					ConstantValueAttribute::Double(v) => (b'D', cp.add_double(*v)),
+					ConstantValueAttribute::String(v) => (b's', cp.add_utf8(v.clone())),
+				};
+				info.write_u8(tag)?;
+				info.write_u16::<BigEndian>(idx)?;
+			}
+			RuntimeAnnotationValue::EnumConstValue { type_name, const_name } => {
+				info.write_u8(b'e')?;
+				let type_idx = cp.add_utf8(type_name.clone());
+				let const_idx = cp.add_utf8(const_name.clone());
+				info.write_u16::<BigEndian>(type_idx)?;
+				info.write_u16::<BigEndian>(const_idx)?;
+			}
+			RuntimeAnnotationValue::ClassInfoIndex(name) => {
+				info.write_u8(b'c')?;
+				let idx = cp.add_utf8(name.clone());
+				info.write_u16::<BigEndian>(idx)?;
+			}
+			RuntimeAnnotationValue::Annotation(a) => {
+				info.write_u8(b'@')?;
+				a.write(cp, info)?;
+			}
+			RuntimeAnnotationValue::ArrayValue { values } => {
+				info.write_u8(b'[')?;
+				info.write_u16::<BigEndian>(values.len().truncate())?;
+				for v in values {
+					v.write(cp, info)?;
+				}
+			}
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -959,6 +1521,18 @@ impl RuntimeAnnotation {
 
 		Ok(Self { ty, pairs })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let type_idx = cp.add_utf8(self.ty.jvm_repr());
+		info.write_u16::<BigEndian>(type_idx)?;
+		info.write_u16::<BigEndian>(self.pairs.len().truncate())?;
+		for pair in &self.pairs {
+			let name_idx = cp.add_utf8(pair.name.clone());
+			info.write_u16::<BigEndian>(name_idx)?;
+			pair.value.write(cp, info)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -972,11 +1546,29 @@ impl RuntimeAnnotationsAttribute {
 		let annotations = buffer.read_vec_with(n_annotations, |b| RuntimeAnnotation::parse(b, cp))?;
 		Ok(Self { annotations })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.annotations.len().truncate())?;
+		for anno in &self.annotations {
+			anno.write(cp, info)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
 pub struct RuntimeParameterAnnotation {
 	pub annotations: Vec<RuntimeAnnotation>,
+}
+
+impl RuntimeParameterAnnotation {
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.annotations.len().truncate())?;
+		for ele in &self.annotations {
+			ele.write(cp, info)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -994,6 +1586,14 @@ impl RuntimeParameterAnnotationsAttribute {
 			})
 		})?;
 		Ok(Self { param_annotations })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u8(self.param_annotations.len().truncate())?;
+		for ele in &self.param_annotations {
+			ele.write(cp, info)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1031,6 +1631,27 @@ impl RuntimeTypeAnnotation {
 			pairs,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		self.target_info.write(info)?;
+
+		info.write_u8(self.target_path.len().truncate())?;
+		for part in &self.target_path {
+			part.write(info)?;
+		}
+
+		let type_idx = cp.add_utf8(self.ty.jvm_repr());
+		info.write_u16::<BigEndian>(type_idx)?;
+
+		info.write_u16::<BigEndian>(self.pairs.len().truncate())?;
+		for pair in &self.pairs {
+			let name_idx = cp.add_utf8(pair.name.clone());
+			info.write_u16::<BigEndian>(name_idx)?;
+			pair.value.write(cp, info)?;
+		}
+
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1043,6 +1664,14 @@ impl RuntimeTypeAnnotationsAttribute {
 		let n_annotations = buffer.read_u16::<BigEndian>()? as usize;
 		let annotations = buffer.read_vec_with(n_annotations, |b| RuntimeTypeAnnotation::parse(b, cp))?;
 		Ok(Self { annotations })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.annotations.len().truncate())?;
+		for anno in &self.annotations {
+			anno.write(cp, info)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1098,6 +1727,55 @@ impl BootstrapMethod {
 			arguments,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let method_ref = match &self.method.descriptor {
+			LIRHandleDescriptor::Field(f) => {
+				cp.add_field_ref(self.method.owner.clone(), self.method.name.clone(), f.jvm_repr())
+			}
+			LIRHandleDescriptor::Method(d) => {
+				if self.method.is_interface {
+					cp.add_interface_method_ref(self.method.owner.clone(), self.method.name.clone(), d.jvm_repr())
+				} else {
+					cp.add_method_ref(self.method.owner.clone(), self.method.name.clone(), d.jvm_repr())
+				}
+			}
+		};
+
+		let handle = cp.add_method_handle(u8::from(self.method.kind), method_ref);
+		info.write_u16::<BigEndian>(handle)?;
+
+		info.write_u16::<BigEndian>(self.arguments.len().truncate())?;
+		for arg in &self.arguments {
+			let idx = match arg {
+				BootstrapMethodArgument::Int(v) => cp.add_integer(v.cast_unsigned()),
+				BootstrapMethodArgument::Long(v) => cp.add_long(v.cast_unsigned()),
+				BootstrapMethodArgument::Float(v) => cp.add_float(*v),
+				BootstrapMethodArgument::Double(v) => cp.add_double(*v),
+				BootstrapMethodArgument::String(v) => cp.add_string(v.clone()),
+				BootstrapMethodArgument::Class(v) => cp.add_class(v.clone()),
+				BootstrapMethodArgument::MethodHandle(h) => {
+					let r = match &h.descriptor {
+						LIRHandleDescriptor::Field(f) => {
+							cp.add_field_ref(h.owner.clone(), h.name.clone(), f.jvm_repr())
+						}
+						LIRHandleDescriptor::Method(d) => {
+							if h.is_interface {
+								cp.add_interface_method_ref(h.owner.clone(), h.name.clone(), d.jvm_repr())
+							} else {
+								cp.add_method_ref(h.owner.clone(), h.name.clone(), d.jvm_repr())
+							}
+						}
+					};
+					cp.add_method_handle(u8::from(h.kind), r)
+				}
+				BootstrapMethodArgument::MethodType(t) => cp.add_method_type(t.jvm_repr()),
+			};
+			info.write_u16::<BigEndian>(idx)?;
+		}
+
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1111,6 +1789,14 @@ impl BootstrapMethodsAttribute {
 		let methods = buffer.read_vec_with(n_methods, |b| BootstrapMethod::parse(b, cp))?;
 		Ok(Self { methods })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.methods.len().truncate())?;
+		for method in &self.methods {
+			method.write(cp, info)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1118,6 +1804,15 @@ pub struct MethodParameterEntry {
 	pub name: Option<String>,
 	// FIXME: document/enforce restrictions
 	pub access: ParameterAccessFlags,
+}
+
+impl MethodParameterEntry {
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let name_idx = self.name.as_ref().map_or(0, |name| cp.add_utf8(name.clone()));
+		info.write_u16::<BigEndian>(name_idx)?;
+		info.write_u16::<BigEndian>(self.access.bits())?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1139,6 +1834,14 @@ impl MethodParametersAttribute {
 			Ok(MethodParameterEntry { name, access })
 		})?;
 		Ok(Self { parameters })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u8(self.parameters.len().truncate())?;
+		for ele in &self.parameters {
+			ele.write(cp, info)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1283,6 +1986,71 @@ impl ModuleAttribute {
 			provides,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let name_idx = cp.add_module(self.name.clone());
+		info.write_u16::<BigEndian>(name_idx)?;
+		info.write_u16::<BigEndian>(self.flags.bits())?;
+
+		let version_idx = self.version.as_ref().map_or(0, |v| cp.add_utf8(v.clone()));
+		info.write_u16::<BigEndian>(version_idx)?;
+
+		info.write_u16::<BigEndian>(self.requires.len().truncate())?;
+		for r in &self.requires {
+			let requires_idx = cp.add_module(r.module.clone());
+			info.write_u16::<BigEndian>(requires_idx)?;
+			info.write_u16::<BigEndian>(r.flags.bits())?;
+
+			let version_idx = r.version.as_ref().map_or(0, |v| cp.add_utf8(v.clone()));
+			info.write_u16::<BigEndian>(version_idx)?;
+		}
+
+		info.write_u16::<BigEndian>(self.exports.len().truncate())?;
+		for e in &self.exports {
+			let exports_idx = cp.add_package(e.package.clone());
+			info.write_u16::<BigEndian>(exports_idx)?;
+			info.write_u16::<BigEndian>(e.flags.bits())?;
+
+			info.write_u16::<BigEndian>(e.exports_to.len().truncate())?;
+			for ele in &e.exports_to {
+				let exports_to_idx = cp.add_module(ele.clone());
+				info.write_u16::<BigEndian>(exports_to_idx)?;
+			}
+		}
+
+		info.write_u16::<BigEndian>(self.opens.len().truncate())?;
+		for o in &self.opens {
+			let opens_index = cp.add_package(o.package.clone());
+			info.write_u16::<BigEndian>(opens_index)?;
+			info.write_u16::<BigEndian>(o.flags.bits())?;
+
+			info.write_u16::<BigEndian>(o.opens_to.len().truncate())?;
+			for ot in &o.opens_to {
+				let opens_to_index = cp.add_module(ot.clone());
+				info.write_u16::<BigEndian>(opens_to_index)?;
+			}
+		}
+
+		info.write_u16::<BigEndian>(self.uses.len().truncate())?;
+		for u in &self.uses {
+			let uses_index = cp.add_class(u.clone());
+			info.write_u16::<BigEndian>(uses_index)?;
+		}
+
+		info.write_u16::<BigEndian>(self.provides.len().truncate())?;
+		for p in &self.provides {
+			let provides_index = cp.add_class(p.service.clone());
+			info.write_u16::<BigEndian>(provides_index)?;
+
+			info.write_u16::<BigEndian>(p.providers.len().truncate())?;
+			for ele in &p.providers {
+				let provider_idx = cp.add_class(ele.clone());
+				info.write_u16::<BigEndian>(provider_idx)?;
+			}
+		}
+
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1300,6 +2068,15 @@ impl ModulePackagesAttribute {
 		})?;
 		Ok(Self { packages })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.packages.len().truncate())?;
+		for p in &self.packages {
+			let package_idx = cp.add_package(p.clone());
+			info.write_u16::<BigEndian>(package_idx)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1312,6 +2089,12 @@ impl ModuleMainClassAttribute {
 		let main_class = cp.resolve_class_name(cp.get_class(buffer.read_u16::<BigEndian>()?)?)?;
 		Ok(Self { main_class })
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let idx = cp.add_class(self.main_class.clone());
+		info.write_u16::<BigEndian>(idx)?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1323,6 +2106,12 @@ impl NestHostAttribute {
 	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
 		let host_class = cp.resolve_class_name(cp.get_class(buffer.read_u16::<BigEndian>()?)?)?;
 		Ok(Self { host_class })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let idx = cp.add_class(self.host_class.clone());
+		info.write_u16::<BigEndian>(idx)?;
+		Ok(())
 	}
 }
 
@@ -1338,6 +2127,15 @@ impl NestMembersAttribute {
 			Ok(cp.resolve_class_name(cp.get_class(b.read_u16::<BigEndian>()?)?)?)
 		})?;
 		Ok(Self { member_classes })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.member_classes.len().truncate())?;
+		for c in &self.member_classes {
+			let idx = cp.add_class(c.clone());
+			info.write_u16::<BigEndian>(idx)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1366,6 +2164,19 @@ impl RecordComponent {
 			attributes,
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		let name_idx = cp.add_utf8(self.name.clone());
+		let desc_idx = cp.add_utf8(self.descriptor.jvm_repr());
+		info.write_u16::<BigEndian>(name_idx)?;
+		info.write_u16::<BigEndian>(desc_idx)?;
+
+		info.write_u16::<BigEndian>(self.attributes.len().truncate())?;
+		for attr in &self.attributes {
+			attr.write(cp)?.write(info)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -1378,6 +2189,14 @@ impl RecordAttribute {
 		let n_components = usize::from(buffer.read_u16::<BigEndian>()?);
 		let components = buffer.read_vec_with(n_components, |b| RecordComponent::parse(b, cp))?;
 		Ok(Self { components })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.components.len().truncate())?;
+		for c in &self.components {
+			c.write(cp, info)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1395,6 +2214,15 @@ impl PermittedSubclassesAttribute {
 			Ok(cp.resolve_class_name(class)?)
 		})?;
 		Ok(Self { subclasses })
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		info.write_u16::<BigEndian>(self.subclasses.len().truncate())?;
+		for ele in &self.subclasses {
+			let idx = cp.add_class(ele.clone());
+			info.write_u16::<BigEndian>(idx)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1431,6 +2259,28 @@ impl VerificationTypeInfo {
 			},
 			tag => bail!("Unrecognized verification type info tag: {tag}"),
 		})
+	}
+
+	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+		match self {
+			VerificationTypeInfo::TopVariableInfo => info.write_u8(0)?,
+			VerificationTypeInfo::IntegerVariableInfo => info.write_u8(1)?,
+			VerificationTypeInfo::FloatVariableInfo => info.write_u8(2)?,
+			VerificationTypeInfo::DoubleVariableInfo => info.write_u8(3)?,
+			VerificationTypeInfo::LongVariableInfo => info.write_u8(4)?,
+			VerificationTypeInfo::NullVariableInfo => info.write_u8(5)?,
+			VerificationTypeInfo::UninitializedThisVariableInfo => info.write_u8(6)?,
+			VerificationTypeInfo::ObjectVariableInfo { class_name } => {
+				info.write_u8(7)?;
+				let idx = cp.add_class(class_name.clone());
+				info.write_u16::<BigEndian>(idx)?;
+			}
+			VerificationTypeInfo::UninitializedVariableInfo { offset } => {
+				info.write_u8(8)?;
+				info.write_u16::<BigEndian>(*offset)?;
+			}
+		}
+		Ok(())
 	}
 }
 
@@ -1478,6 +2328,28 @@ impl TypePathPart {
 			kind => bail!("Unknown type path kind: {}", kind),
 		}
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, info: &mut W) -> Result<()> {
+		match self {
+			TypePathPart::ArrayElement => {
+				info.write_u8(0)?; // type_path_kind
+				info.write_u8(0)?; // type_argument_index
+			}
+			TypePathPart::InnerType => {
+				info.write_u8(1)?;
+				info.write_u8(0)?;
+			}
+			TypePathPart::WildcardBound => {
+				info.write_u8(2)?;
+				info.write_u8(0)?;
+			}
+			TypePathPart::TypeArgument { index } => {
+				info.write_u8(3)?;
+				info.write_u8(*index)?;
+			}
+		}
+		Ok(())
+	}
 }
 
 pub type TypePath = Vec<TypePathPart>;
@@ -1502,33 +2374,34 @@ pub struct RuntimeTypeAnnotationLocalVarTargetTableEntry {
 
 #[derive(Debug, Clone)]
 pub enum RuntimeTypeAnnotationTargetInfo {
-	TypeParameterTarget {
-		type_param_index: u8,
-	},
-	SupertypeTarget {
-		supertype_index: u16,
-	},
+	/// 0x00 (Class), 0x01 (Method)
+	TypeParameterTarget { target_type: u8, type_param_index: u8 },
+	/// 0x10
+	SupertypeTarget { supertype_index: u16 },
+	/// 0x11 (Class), 0x12 (Method)
 	TypeParameterBoundTarget {
+		target_type: u8,
 		type_param_index: u8,
 		bound_index: u8,
 	},
-	EmptyTarget,
-	FormalParameterTarget {
-		formal_param_index: u8,
-	},
-	ThrowsTarget {
-		throws_type_index: u16,
-	},
+	/// 0x13 (Field), 0x14 (Method Return), 0x15 (Receiver)
+	EmptyTarget { target_type: u8 },
+	/// 0x16
+	FormalParameterTarget { formal_param_index: u8 },
+	/// 0x17
+	ThrowsTarget { throws_type_index: u16 },
+	/// 0x40 (`LocalVar`), 0x41 (`ResourceVar`)
 	LocalvarTarget {
+		target_type: u8,
 		table: Vec<RuntimeTypeAnnotationLocalVarTargetTableEntry>,
 	},
-	CatchTarget {
-		exception_table_index: u16,
-	},
-	OffsetTarget {
-		offset: u16,
-	},
+	/// 0x42
+	CatchTarget { exception_table_index: u16 },
+	/// 0x43 (Instanceof), 0x44 (New), 0x45 (`MethodRefNew`), 0x46 (`MethodRefIdentifier`)
+	OffsetTarget { target_type: u8, offset: u16 },
+	/// 0x47 (Cast), 0x48 (`CtorGeneric`), 0x49 (`MethodGeneric`), 0x4A (`CtorRefGeneric`), 0x4B`MethodRefGeneric`ic)
 	TypeArgumentTarget {
+		target_type: u8,
 		offset: u16,
 		type_argument_index: u8,
 	},
@@ -1538,17 +2411,19 @@ impl RuntimeTypeAnnotationTargetInfo {
 	pub fn parse<B: ReadBytesExt>(target_type: u8, buffer: &mut B) -> Result<Self> {
 		Ok(match target_type {
 			// 4.7.20-A
-			0x0 | 0x01 => RuntimeTypeAnnotationTargetInfo::TypeParameterTarget {
+			0x00 | 0x01 => RuntimeTypeAnnotationTargetInfo::TypeParameterTarget {
+				target_type,
 				type_param_index: buffer.read_u8()?,
 			},
 			0x10 => RuntimeTypeAnnotationTargetInfo::SupertypeTarget {
 				supertype_index: buffer.read_u16::<BigEndian>()?,
 			},
 			0x11 | 0x12 => RuntimeTypeAnnotationTargetInfo::TypeParameterBoundTarget {
+				target_type,
 				type_param_index: buffer.read_u8()?,
 				bound_index: buffer.read_u8()?,
 			},
-			0x13..=0x15 => RuntimeTypeAnnotationTargetInfo::EmptyTarget,
+			0x13..=0x15 => RuntimeTypeAnnotationTargetInfo::EmptyTarget { target_type },
 			0x16 => RuntimeTypeAnnotationTargetInfo::FormalParameterTarget {
 				formal_param_index: buffer.read_u8()?,
 			},
@@ -1569,15 +2444,17 @@ impl RuntimeTypeAnnotationTargetInfo {
 					});
 				}
 
-				RuntimeTypeAnnotationTargetInfo::LocalvarTarget { table }
+				RuntimeTypeAnnotationTargetInfo::LocalvarTarget { target_type, table }
 			}
 			0x42 => RuntimeTypeAnnotationTargetInfo::CatchTarget {
 				exception_table_index: buffer.read_u16::<BigEndian>()?,
 			},
-			0x43..=0x45 => RuntimeTypeAnnotationTargetInfo::OffsetTarget {
+			0x43..=0x46 => RuntimeTypeAnnotationTargetInfo::OffsetTarget {
+				target_type,
 				offset: buffer.read_u16::<BigEndian>()?,
 			},
 			0x47..=0x4B => RuntimeTypeAnnotationTargetInfo::TypeArgumentTarget {
+				target_type,
 				offset: buffer.read_u16::<BigEndian>()?,
 				type_argument_index: buffer.read_u8()?,
 			},
@@ -1585,4 +2462,94 @@ impl RuntimeTypeAnnotationTargetInfo {
 			target_type => bail!("Unknown RuntimeTypeAnnotationTargetInfo target_type: {}", target_type),
 		})
 	}
+
+	pub fn write<W: WriteBytesExt>(&self, info: &mut W) -> Result<()> {
+		match self {
+			Self::TypeParameterTarget {
+				target_type,
+				type_param_index,
+			} => {
+				info.write_u8(*target_type)?;
+				info.write_u8(*type_param_index)?;
+			}
+			Self::SupertypeTarget { supertype_index } => {
+				info.write_u8(0x10)?;
+				info.write_u16::<BigEndian>(*supertype_index)?;
+			}
+			Self::TypeParameterBoundTarget {
+				target_type,
+				type_param_index,
+				bound_index,
+			} => {
+				info.write_u8(*target_type)?;
+				info.write_u8(*type_param_index)?;
+				info.write_u8(*bound_index)?;
+			}
+			Self::EmptyTarget { target_type } => {
+				info.write_u8(*target_type)?;
+			}
+			Self::FormalParameterTarget { formal_param_index } => {
+				info.write_u8(0x16)?;
+				info.write_u8(*formal_param_index)?;
+			}
+			Self::ThrowsTarget { throws_type_index } => {
+				info.write_u8(0x17)?;
+				info.write_u16::<BigEndian>(*throws_type_index)?;
+			}
+			Self::LocalvarTarget { target_type, table } => {
+				info.write_u8(*target_type)?;
+				info.write_u16::<BigEndian>(table.len().truncate())?;
+				for entry in table {
+					info.write_u16::<BigEndian>(entry.start_pc)?;
+					info.write_u16::<BigEndian>(entry.length)?;
+					info.write_u16::<BigEndian>(entry.index)?;
+				}
+			}
+			Self::CatchTarget { exception_table_index } => {
+				info.write_u8(0x42)?;
+				info.write_u16::<BigEndian>(*exception_table_index)?;
+			}
+			Self::OffsetTarget { target_type, offset } => {
+				info.write_u8(*target_type)?;
+				info.write_u16::<BigEndian>(*offset)?;
+			}
+			Self::TypeArgumentTarget {
+				target_type,
+				offset,
+				type_argument_index,
+			} => {
+				info.write_u8(*target_type)?;
+				info.write_u16::<BigEndian>(*offset)?;
+				info.write_u8(*type_argument_index)?;
+			}
+		}
+		Ok(())
+	}
+}
+
+#[must_use]
+pub fn bsm_eq(bsm: &BootstrapMethod, handle: &LIRMethodHandle, args: &[BootstrapMethodArgument]) -> bool {
+	if &bsm.method != handle {
+		return false;
+	}
+	if bsm.arguments.len() != args.len() {
+		return false;
+	}
+	for (a, b) in bsm.arguments.iter().zip(args.iter()) {
+		let match_arg = match (a, b) {
+			(BootstrapMethodArgument::Int(x), BootstrapMethodArgument::Int(y)) => x == y,
+			(BootstrapMethodArgument::Long(x), BootstrapMethodArgument::Long(y)) => x == y,
+			(BootstrapMethodArgument::Float(x), BootstrapMethodArgument::Float(y)) => x.to_bits() == y.to_bits(),
+			(BootstrapMethodArgument::Double(x), BootstrapMethodArgument::Double(y)) => x.to_bits() == y.to_bits(),
+			(BootstrapMethodArgument::String(x), BootstrapMethodArgument::String(y))
+			| (BootstrapMethodArgument::Class(x), BootstrapMethodArgument::Class(y)) => x == y,
+			(BootstrapMethodArgument::MethodHandle(x), BootstrapMethodArgument::MethodHandle(y)) => x == y,
+			(BootstrapMethodArgument::MethodType(x), BootstrapMethodArgument::MethodType(y)) => x == y,
+			_ => false,
+		};
+		if !match_arg {
+			return false;
+		}
+	}
+	true
 }
