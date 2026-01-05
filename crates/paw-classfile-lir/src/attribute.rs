@@ -706,7 +706,7 @@ impl CodeAttribute {
 			exc.write(cp, info)?;
 		}
 
-		info.write_u16::<BigEndian>(0)?;
+		info.write_u16::<BigEndian>(self.attributes.len().truncate())?;
 		for attr in &self.attributes {
 			attr.write(cp)?.write(info)?;
 		}
