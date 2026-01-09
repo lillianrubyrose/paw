@@ -54,3 +54,7 @@ cast_lossless = "deny"
 cast_sign_loss = "deny"
 
 unreadable_literal = "deny"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

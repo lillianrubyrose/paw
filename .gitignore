@@ -1,3 +1,4 @@
 /target
 /test_data/**/**.class
 /test_data/torture
+/fuzz_data*

@@ -1,0 +1,11 @@
+[package]
+name = "lir_fuzz"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+afl = "0.17.0"
+paw_classfile_format = { path = "../../paw_classfile_format" }
+paw_classfile_lir = { path = "../" }
