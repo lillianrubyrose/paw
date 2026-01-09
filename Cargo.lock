@@ -615,6 +615,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "paw_classfile_mir"
+version = "0.0.1-dev"
+dependencies = [
+ "eyre",
+ "paw_classfile_format",
+ "paw_classfile_lir",
+]
+
+[[package]]
 name = "paw_mutf8"
 version = "0.0.1-dev"
 dependencies = [

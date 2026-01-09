@@ -7,14 +7,13 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-paw_classfile_format = { path = "../paw-classfile-format" }
-paw_mutf8 = { path = "../paw-mutf8" }
+paw_mutf8.workspace = true
+paw_classfile_format.workspace = true
 
 byteorder.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
 eyre.workspace = true
 color-eyre.workspace = true
-num-conv = "0.2.0"
-
-bitflags = "2.10.0"
+num-conv.workspace = true
+bitflags.workspace = true

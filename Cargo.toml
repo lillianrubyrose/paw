@@ -1,19 +1,29 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/paw-classfile-format"
-, "crates/paw-classfile-lir", "crates/paw-mutf8", "crates/paw_bin"]
+    "crates/paw_bin",
+    "crates/paw_classfile_format",
+    "crates/paw_classfile_lir",
+    "crates/paw_mutf8",
+]
 
 [workspace.package]
 version = "0.0.1-dev"
 edition = "2024"
 
 [workspace.dependencies]
+paw_mutf8 = { path = "crates/paw_mutf8" }
+paw_classfile_format = { path = "crates/paw_classfile_format" }
+paw_classfile_lir = { path = "crates/paw_classfile_lir" }
+
 byteorder = "1.5.0"
 thiserror = "1.0.69"
 eyre = "0.6.12"
 color-eyre = "0.6.5"
 bytemuck = {version = "1.24.0", features = ["derive", "min_const_generics"]}
+num-conv = "0.2.0"
+bitflags = "2.10.0"
+paste = "1.0.15"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
