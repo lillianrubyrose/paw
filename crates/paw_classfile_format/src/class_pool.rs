@@ -52,9 +52,12 @@ impl ConstantPool {
 	}
 
 	pub fn get_tag(&self, idx: ConstantPoolIndex) -> Result<&CPTag, ConstantPoolIndexErr> {
+		let checked_idx_sub = (idx as usize)
+			.checked_sub(1)
+			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
 		match self
 			.tags
-			.get(idx as usize - 1)
+			.get(checked_idx_sub)
 			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?
 		{
 			CPEntry::Tag(tag) => Ok(tag),

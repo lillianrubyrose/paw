@@ -371,7 +371,7 @@ impl LIRCodeAttribute {
 			| LIRCodeAttribute::RuntimeInvisibleTypeAnnotations(rta) => {
 				rta.write(cp, &mut info)?;
 			}
-			LIRCodeAttribute::Unknown(_) => unreachable!(),
+			LIRCodeAttribute::Unknown(_) => unreachable!("Code attribute 'Unknown' should never be written"),
 		}
 
 		Ok(AttributeInfo {

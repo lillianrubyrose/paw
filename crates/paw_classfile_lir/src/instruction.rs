@@ -1398,11 +1398,13 @@ impl Instruction {
 						_ => None,
 					})
 					.ok_or_eyre("class had INVOKE_DYNAMIC but did not have a BootstrapMethods attr")?;
-				let bsm = bootstrap_methods
+				let Some(bsm) = bootstrap_methods
 					.methods
 					.get(tag.bootstrap_method_attr_index as usize)
 					.cloned()
-					.unwrap();
+				else {
+					bail!("Referenced BSM for InvokeDynamic not present in parent")
+				};
 
 				let nat = cp.get_name_and_type(tag.name_and_ty_index)?;
 				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
@@ -1719,7 +1721,10 @@ impl Instruction {
 				}
 
 				let count = i64::from(high) - i64::from(low) + 1;
-				assert!(count <= 65535, "handle this case");
+				if count > 65535 {
+					// TODO: are we supposed to just fail here?
+					bail!("TableSwitch count ({}) is too high max=65535", count);
+				}
 
 				#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked above")]
 				let mut targets = Vec::with_capacity(count as usize);
@@ -1754,7 +1759,7 @@ impl Instruction {
 				LIRLabel::Resolved(l) => *label_map
 					.get(l)
 					.ok_or_else(|| eyre!("Unresolved label {:?} at pc {}", l, pc))?,
-				LIRLabel::Unresolved(_) => panic!("labels should never be unresolved when writing"),
+				LIRLabel::Unresolved(_) => unreachable!("labels should never be unresolved when writing"),
 			};
 			Ok(target_pc.cast_signed() - (pc.cast_signed()))
 		};
@@ -1970,7 +1975,7 @@ impl Instruction {
 				3 => opcode(opcodes::ICONST_3)?,
 				4 => opcode(opcodes::ICONST_4)?,
 				5 => opcode(opcodes::ICONST_5)?,
-				_ => unreachable!("IConst should never hold a value outside of the -1..=5"),
+				_ => bail!("IConst should never hold a value outside of the -1..=5"),
 			},
 			Instruction::IDiv => opcode(opcodes::IDIV)?,
 			Instruction::IfACmpEq { target } => {
@@ -2186,7 +2191,7 @@ impl Instruction {
 			Instruction::LConst { value } => match value {
 				0 => opcode(opcodes::LCONST_0)?,
 				1 => opcode(opcodes::LCONST_1)?,
-				_ => panic!("Unrecognized LConst value {}", value),
+				_ => bail!("Unrecognized LConst value {}", value),
 			},
 			Instruction::Ldc { constant } => {
 				let (idx, is_wide) = match constant {

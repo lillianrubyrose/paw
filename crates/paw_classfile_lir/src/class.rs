@@ -1,4 +1,4 @@
-use eyre::Result;
+use eyre::{Result, bail};
 use paw_classfile_format::{
 	ClassAccessFlags, ClassFile, ClassFileVersion, FieldInfo, MethodInfo, class_pool::ConstantPool,
 };
@@ -43,8 +43,7 @@ impl LIRClass {
 			.attributes
 			.into_iter()
 			.map(|attr| LIRClassAttribute::parse(&attr, &cp))
-			.collect::<Result<Vec<_>>>()
-			.unwrap();
+			.collect::<Result<Vec<_>>>()?;
 
 		let fields = raw
 			.fields
@@ -57,8 +56,7 @@ impl LIRClass {
 					.attributes
 					.into_iter()
 					.map(|attr| LIRFieldAttribute::parse(&attr, &cp))
-					.collect::<Result<Vec<_>>>()
-					.unwrap();
+					.collect::<Result<Vec<_>>>()?;
 				Ok(LIRField {
 					access_flags,
 					name,
@@ -79,8 +77,7 @@ impl LIRClass {
 					.attributes
 					.into_iter()
 					.map(|attr| LIRMethodAttribute::parse(&attr, &cp, &class_attrs))
-					.collect::<Result<Vec<_>>>()
-					.unwrap();
+					.collect::<Result<Vec<_>>>()?;
 				Ok(LIRMethod {
 					access_flags,
 					name,
@@ -94,19 +91,19 @@ impl LIRClass {
 		// some attributes hold attributes themselves, we don't validate those currently
 		for attr in class_attrs.iter() {
 			if let LIRClassAttribute::Unknown(val) = attr {
-				panic!("unknown attribute `{}` in class `{}`", val, this_class)
+				bail!("unknown attribute `{}` in class `{}`", val, this_class)
 			}
 		}
 
 		for attr in fields.iter().flat_map(|f| &f.attributes) {
 			if let LIRFieldAttribute::Unknown(val) = attr {
-				panic!("unknown attribute `{}` in field `{}`", val, this_class)
+				bail!("unknown attribute `{}` in field `{}`", val, this_class)
 			}
 		}
 
 		for attr in methods.iter().flat_map(|m| &m.attributes) {
 			if let LIRMethodAttribute::Unknown(val) = attr {
-				panic!("unknown attribute `{}` in method `{}`", val, this_class)
+				bail!("unknown attribute `{}` in method `{}`", val, this_class)
 			}
 		}
 
