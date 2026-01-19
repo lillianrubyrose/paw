@@ -113,9 +113,6 @@ pub fn decode(input: &[u8]) -> Result<Cow<'_, str>, Mutf8DecodeError> {
 fn decode_slow(input: &[u8]) -> Result<String, Mutf8DecodeError> {
 	let mut out = String::with_capacity(input.len());
 
-	// By pushing directly to the vector we avoid an unnecessary UTF-8 check on every call
-	let out_vec = unsafe { out.as_mut_vec() };
-
 	let mut i = 0;
 	let len = input.len();
 
@@ -125,7 +122,7 @@ fn decode_slow(input: &[u8]) -> Result<String, Mutf8DecodeError> {
 		i += 1;
 
 		if b1 < 0x80 {
-			out_vec.push(b1);
+			out.push(char::from(b1));
 		} else if b1 < 0xE0 {
 			// 2-byte sequence
 			if i >= len {
@@ -137,14 +134,14 @@ fn decode_slow(input: &[u8]) -> Result<String, Mutf8DecodeError> {
 			i += 1;
 
 			if b1 == 0xC0 && b2 == 0x80 {
-				out_vec.push(0x00);
+				out.push('\0');
 			} else {
 				if b2 & 0xC0 != 0x80 {
 					return Err(Mutf8DecodeError::InvalidSequence);
 				}
 
-				out_vec.push(b1);
-				out_vec.push(b2);
+				out.push(char::from(b1));
+				out.push(char::from(b2));
 			}
 		} else if b1 < 0xF0 {
 			// 3-byte sequence
@@ -179,19 +176,19 @@ fn decode_slow(input: &[u8]) -> Result<String, Mutf8DecodeError> {
 
 				let codepoint = 0x10000 + (((high & 0x3FF) << 10) | (low & 0x3FF));
 
-				out_vec.push(0xF0 | ((codepoint >> 18).truncate::<u8>()));
-				out_vec.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
-				out_vec.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
-				out_vec.push(0x80 | ((codepoint & 0x3F) as u8));
+				out.push(char::from(0xF0 | ((codepoint >> 18).truncate::<u8>())));
+				out.push(char::from(0x80 | (((codepoint >> 12) & 0x3F) as u8)));
+				out.push(char::from(0x80 | (((codepoint >> 6) & 0x3F) as u8)));
+				out.push(char::from(0x80 | ((codepoint & 0x3F) as u8)));
 			} else {
 				// Standard 3-byte sequence
 				if (b2 & 0xC0 != 0x80) || (b3 & 0xC0 != 0x80) {
 					return Err(Mutf8DecodeError::InvalidSequence);
 				}
 
-				out_vec.push(b1);
-				out_vec.push(b2);
-				out_vec.push(b3);
+				out.push(char::from(b1));
+				out.push(char::from(b2));
+				out.push(char::from(b3));
 			}
 		} else {
 			// 4-byte sequences aren't valid MUTF-8
