@@ -1205,7 +1205,7 @@ impl SourceFileAttribute {
 
 #[derive(Debug, Clone)]
 pub struct DebugExtensionAttribute {
-	pub debug_data: Vec<u8>,
+	pub debug_data: String,
 }
 
 impl DebugExtensionAttribute {
@@ -1213,12 +1213,14 @@ impl DebugExtensionAttribute {
 		// the debug extension just uses the entire length of the attribute data
 		let mut buf = Vec::new();
 		buffer.read_to_end(&mut buf)?;
-		Ok(Self { debug_data: buf })
+		let debug_data = paw_mutf8::decode(&buf)?.to_string();
+		Ok(Self { debug_data })
 	}
 
 	pub fn write<W: WriteBytesExt>(&self, info: &mut W) -> Result<()> {
-		info.write_u16::<BigEndian>(self.debug_data.len().truncate())?;
-		info.write_all(&self.debug_data)?;
+		let encoded = paw_mutf8::encode(&self.debug_data);
+		info.write_u16::<BigEndian>(encoded.len().truncate())?;
+		info.write_all(&encoded)?;
 		Ok(())
 	}
 }
