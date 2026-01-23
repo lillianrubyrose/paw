@@ -350,6 +350,15 @@ pub enum LIRLabel {
 
 impl LIRLabel {
 	#[must_use]
+	#[track_caller]
+	pub fn as_resolved(self) -> LIRResolvedLabel {
+		match self {
+			LIRLabel::Unresolved(_) => unreachable!("BUG: called as_resolved on an unresolved label"),
+			LIRLabel::Resolved(inner) => inner,
+		}
+	}
+
+	#[must_use]
 	pub const fn is_resolved(&self) -> bool {
 		match self {
 			LIRLabel::Unresolved(_) => false,
@@ -1746,24 +1755,30 @@ impl Instruction {
 		Ok(inst)
 	}
 
+	/// writes an instruction to `buffer`.
+	/// returns a map containing all of the labels that need to be fixed after writing.
+	/// map is from the byte offset from `pc` where the label starts to the label and whether it's a wide reference.
 	pub fn write<W: WriteBytesExt>(
 		&self,
 		buffer: &mut W,
 		cp: &mut ConstantPool,
 		pc: u32,
-		label_map: &HashMap<LIRResolvedLabel, u32>,
 		bsm_pool: &[BootstrapMethod],
-	) -> Result<()> {
-		let calc_jmp_offset = |target: &LIRLabel| -> Result<i32> {
-			let target_pc = match target {
-				LIRLabel::Resolved(l) => *label_map
-					.get(l)
-					.ok_or_else(|| eyre!("Unresolved label {:?} at pc {}", l, pc))?,
-				LIRLabel::Unresolved(_) => unreachable!("labels should never be unresolved when writing"),
-			};
-			Ok(target_pc.cast_signed() - (pc.cast_signed()))
-		};
+	) -> Result<HashMap<u32, (LIRResolvedLabel, bool)>> {
 		let mut opcode = |op: u8| buffer.write_u8(op);
+
+		let mut labels = HashMap::new();
+		let mut write_label = |buffer: &mut W, pc_offset: u32, label: LIRResolvedLabel, is_wide: bool| -> Result<()> {
+			const DUMMY_THIN_LABEL: i16 = i16::MAX;
+			const DUMMY_WIDE_LABEL: i32 = i32::MAX;
+
+			labels.insert(pc_offset, (label, is_wide));
+			match is_wide {
+				true => buffer.write_i32::<BigEndian>(DUMMY_WIDE_LABEL)?,
+				false => buffer.write_i16::<BigEndian>(DUMMY_THIN_LABEL)?,
+			}
+			Ok(())
+		};
 
 		match self {
 			Instruction::AALoad => opcode(opcodes::AALOAD)?,
@@ -1948,14 +1963,12 @@ impl Instruction {
 				buffer.write_u16::<BigEndian>(idx)?;
 			}
 			Instruction::Goto { target } => {
-				let offset = calc_jmp_offset(target)?;
 				opcode(opcodes::GOTO)?;
-				buffer.write_i16::<BigEndian>(offset.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::GotoW { target } => {
-				let offset = calc_jmp_offset(target)?;
 				opcode(opcodes::GOTO_W)?;
-				buffer.write_i32::<BigEndian>(offset)?;
+				write_label(buffer, 1, target.as_resolved(), true)?;
 			}
 			Instruction::I2B => opcode(opcodes::I2B)?,
 			Instruction::I2C => opcode(opcodes::I2C)?,
@@ -1980,67 +1993,67 @@ impl Instruction {
 			Instruction::IDiv => opcode(opcodes::IDIV)?,
 			Instruction::IfACmpEq { target } => {
 				opcode(opcodes::IF_ACMPEQ)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfACmpNe { target } => {
 				opcode(opcodes::IF_ACMPNE)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfICmpEq { target } => {
 				opcode(opcodes::IF_ICMPEQ)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfICmpNe { target } => {
 				opcode(opcodes::IF_ICMPNE)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfICmpLt { target } => {
 				opcode(opcodes::IF_ICMPLT)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfICmpGt { target } => {
 				opcode(opcodes::IF_ICMPGT)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfICmpLe { target } => {
 				opcode(opcodes::IF_ICMPLE)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfICmpGe { target } => {
 				opcode(opcodes::IF_ICMPGE)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfEq { target } => {
 				opcode(opcodes::IFEQ)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfNe { target } => {
 				opcode(opcodes::IFNE)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfLt { target } => {
 				opcode(opcodes::IFLT)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfGt { target } => {
 				opcode(opcodes::IFGT)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfLe { target } => {
 				opcode(opcodes::IFLE)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfGe { target } => {
 				opcode(opcodes::IFGE)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfNonNull { target } => {
 				opcode(opcodes::IFNONNULL)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IfNull { target } => {
 				opcode(opcodes::IFNULL)?;
-				buffer.write_i16::<BigEndian>(calc_jmp_offset(target)?.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::IInc { local_index, val } => {
 				if *local_index > u16::from(u8::MAX) || *val > i16::from(i8::MAX) || *val < i16::from(i8::MIN) {
@@ -2171,14 +2184,12 @@ impl Instruction {
 			Instruction::IUShr => opcode(opcodes::IUSHR)?,
 			Instruction::IXor => opcode(opcodes::IXOR)?,
 			Instruction::Jsr { target } => {
-				let offset = calc_jmp_offset(target)?;
 				opcode(opcodes::JSR)?;
-				buffer.write_i16::<BigEndian>(offset.truncate())?;
+				write_label(buffer, 1, target.as_resolved(), false)?;
 			}
 			Instruction::JsrW { target } => {
-				let offset = calc_jmp_offset(target)?;
 				opcode(opcodes::JSR_W)?;
-				buffer.write_i32::<BigEndian>(offset)?;
+				write_label(buffer, 1, target.as_resolved(), true)?;
 			}
 			Instruction::LongToDouble => opcode(opcodes::L2D)?,
 			Instruction::LongToFloat => opcode(opcodes::L2F)?,
@@ -2253,13 +2264,13 @@ impl Instruction {
 				opcode(opcodes::LOOKUPSWITCH)?;
 
 				let current_offset = pc + 1;
-				let padding = (4 - (current_offset % 4)) % 4;
+				let aligned_offset = current_offset.next_multiple_of(4);
+				let padding = aligned_offset - current_offset;
 				for _ in 0..padding {
 					buffer.write_u8(0)?;
 				}
 
-				let default_offset = calc_jmp_offset(default_target)?;
-				buffer.write_i32::<BigEndian>(default_offset)?;
+				write_label(buffer, 1 + padding, default_target.as_resolved(), true)?;
 
 				let npairs = pairs.len();
 				if npairs > i32::MAX as usize {
@@ -2273,10 +2284,12 @@ impl Instruction {
 				)]
 				buffer.write_i32::<BigEndian>(npairs as i32)?;
 
+				let mut current_offset = 1 + padding + 4 + 4;
 				for (match_key, target) in pairs {
 					buffer.write_i32::<BigEndian>(*match_key)?;
-					let offset = calc_jmp_offset(target)?;
-					buffer.write_i32::<BigEndian>(offset)?;
+					current_offset += 4;
+					write_label(buffer, current_offset, target.as_resolved(), true)?;
+					current_offset += 4;
 				}
 			}
 			Instruction::LOr => opcode(opcodes::LOR)?,
@@ -2368,13 +2381,13 @@ impl Instruction {
 				opcode(opcodes::TABLESWITCH)?;
 
 				let current_offset = pc + 1;
-				let padding = (4 - (current_offset % 4)) % 4;
+				let aligned_offset = current_offset.next_multiple_of(4);
+				let padding = aligned_offset - current_offset;
 				for _ in 0..padding {
 					buffer.write_u8(0)?;
 				}
 
-				let default_offset = calc_jmp_offset(default_target)?;
-				buffer.write_i32::<BigEndian>(default_offset)?;
+				write_label(buffer, 1 + padding, default_target.as_resolved(), true)?;
 
 				buffer.write_i32::<BigEndian>(*low)?;
 				buffer.write_i32::<BigEndian>(*high)?;
@@ -2389,13 +2402,14 @@ impl Instruction {
 					);
 				}
 
+				let mut current_offset = 1 + padding + 4 + 4 + 4;
 				for target in targets {
-					let offset = calc_jmp_offset(target)?;
-					buffer.write_i32::<BigEndian>(offset)?;
+					write_label(buffer, current_offset, target.as_resolved(), true)?;
+					current_offset += 4;
 				}
 			}
 		}
 
-		Ok(())
+		Ok(labels)
 	}
 }

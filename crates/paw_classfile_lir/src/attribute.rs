@@ -521,8 +521,7 @@ impl CodeAttributeException {
 pub struct CodeAttribute {
 	pub max_stack: u16,
 	pub max_locals: u16,
-	/// offset (pc), instruction, resolved labels pairs
-	pub code: Vec<(u32, Instruction, Vec<LIRLabel>)>,
+	pub code: Vec<(Instruction, Vec<LIRResolvedLabel>)>,
 	pub exception_table: Vec<CodeAttributeException>,
 	pub attributes: Vec<LIRCodeAttribute>,
 }
@@ -669,7 +668,10 @@ impl CodeAttribute {
 		Ok(CodeAttribute {
 			max_stack,
 			max_locals,
-			code,
+			code: code
+				.into_iter()
+				.map(|(_pc, inst, label)| (inst, label.into_iter().map(|l| l.as_resolved()).collect()))
+				.collect(),
 			exception_table,
 			attributes,
 		})
@@ -684,19 +686,51 @@ impl CodeAttribute {
 		info.write_u16::<BigEndian>(self.max_stack)?;
 		info.write_u16::<BigEndian>(self.max_locals)?;
 
-		let mut label_map = HashMap::new();
-		for (pc, _, labels) in &self.code {
-			for label in labels {
-				if let LIRLabel::Resolved(r) = label {
-					label_map.insert(*r, *pc);
-				}
+		// map from pc to fix -> label info
+		let mut fixup_labels = HashMap::new();
+		// map from resolved label -> pc
+		let mut label_positions = HashMap::new();
+
+		let mut code_buf = Vec::new();
+		for (inst, labels) in &self.code {
+			let pc = code_buf.len() as u32;
+			for label in labels.iter().cloned() {
+				let existing = label_positions.insert(label, pc);
+				assert!(existing.is_none(), "two instructions have the same label {:?}", label);
+			}
+			let to_fix = inst.write(&mut code_buf, cp, pc, bsm_pool)?;
+			for (offset, (label, is_wide)) in to_fix.into_iter() {
+				let existing = fixup_labels.insert((pc, offset), (label, is_wide));
+				assert!(existing.is_none(), "two labels to fix at the same pc {}", pc);
 			}
 		}
 
-		let mut code_buf = Vec::new();
-		for (pc, inst, _) in &self.code {
-			inst.write(&mut code_buf, cp, *pc, &label_map, bsm_pool)?;
+		for ((fixup_pc, fixup_offset), (label, is_wide)) in fixup_labels.into_iter() {
+			let label_pc = label_positions
+				.get(&label)
+				.unwrap_or_else(|| unreachable!("label was referenced but not attached to an instruction"));
+
+			// relative pc (byte offset) of the instruction that this
+			// label is targetting.
+			let label_offset = label_pc.cast_signed() - fixup_pc.cast_signed();
+			let code_idx = (fixup_pc + fixup_offset) as usize;
+
+			match is_wide {
+				true => code_buf[code_idx..][..4].copy_from_slice(label_offset.to_be_bytes().as_slice()),
+				false => match i16::try_from(label_offset) {
+					Ok(label_offset) => code_buf[code_idx..][..2]
+						.copy_from_slice(label_offset.truncate::<i16>().to_be_bytes().as_slice()),
+					Err(_) => bail!(
+						"label {:?} used at {} referenced pc {} displacement {} out of range for i16",
+						label,
+						code_idx,
+						label_pc,
+						label_offset
+					),
+				},
+			}
 		}
+
 		#[allow(clippy::cast_possible_truncation, reason = "aaaa")]
 		info.write_u32::<BigEndian>(code_buf.len() as u32)?;
 		info.write_all(&code_buf)?;

@@ -150,7 +150,7 @@ impl LIRClass {
 		for method in &self.methods {
 			for attr in &method.attributes {
 				if let LIRMethodAttribute::Code(code) = attr {
-					for (_, inst, _) in &code.code {
+					for (inst, _) in &code.code {
 						let Instruction::InvokeDynamic {
 							bsm_handle, bsm_args, ..
 						} = inst
