@@ -500,18 +500,38 @@ impl ConstantValueAttribute {
 
 #[derive(Debug, Clone)]
 pub struct CodeAttributeException {
-	pub start_pc: u16,
-	pub end_pc: u16,
-	pub handler_pc: u16,
+	pub start_pc: LIRResolvedLabel,
+	pub end_pc: LIRResolvedLabel,
+	pub handler_pc: LIRResolvedLabel,
 	pub catch_type: Option<String>, // ClassRef
 }
 
 impl CodeAttributeException {
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
 		let idx = self.catch_type.as_ref().map_or(0, |t| cp.add_class(t.clone()));
-		info.write_u16::<BigEndian>(self.start_pc)?;
-		info.write_u16::<BigEndian>(self.end_pc)?;
-		info.write_u16::<BigEndian>(self.handler_pc)?;
+		info.write_u16::<BigEndian>(
+			label_positions
+				.get(&self.start_pc)
+				.unwrap_or_else(|| unreachable!("label was referenced but not attached to an instruction"))
+				.truncate(),
+		)?;
+		info.write_u16::<BigEndian>(
+			label_positions
+				.get(&self.end_pc)
+				.unwrap_or_else(|| unreachable!("label was referenced but not attached to an instruction"))
+				.truncate(),
+		)?;
+		info.write_u16::<BigEndian>(
+			label_positions
+				.get(&self.handler_pc)
+				.unwrap_or_else(|| unreachable!("label was referenced but not attached to an instruction"))
+				.truncate(),
+		)?;
 		info.write_u16::<BigEndian>(idx)?;
 		Ok(())
 	}
@@ -532,6 +552,13 @@ impl CodeAttribute {
 		cp: &ConstantPool,
 		class_attrs: &[LIRClassAttribute],
 	) -> Result<Self> {
+		struct UnresolvedCodeAttributeException {
+			pub start_pc: u16,
+			pub end_pc: u16,
+			pub handler_pc: u16,
+			pub catch_type: Option<String>, // ClassRef
+		}
+
 		let max_stack = buffer
 			.read_u16::<BigEndian>()
 			.wrap_err("failed to read max_stack from Code attribute")?;
@@ -550,7 +577,7 @@ impl CodeAttribute {
 			.read_u16::<BigEndian>()
 			.wrap_err("failed to read exception_table_length from Code attribute")?;
 		let exception_table = buffer.read_vec_with(exceptions_len as usize, |reader| {
-			Ok(CodeAttributeException {
+			Ok(UnresolvedCodeAttributeException {
 				start_pc: reader
 					.read_u16::<BigEndian>()
 					.wrap_err("failed to read exception_table start_pc from Code attribute")?,
@@ -655,9 +682,15 @@ impl CodeAttribute {
 			}
 		}
 
-		for exception in &exception_table {
-			allocate_label(u32::from(exception.handler_pc));
-		}
+		let exception_table: Vec<CodeAttributeException> = exception_table
+			.into_iter()
+			.map(|unresolved| CodeAttributeException {
+				start_pc: allocate_label(u32::from(unresolved.start_pc)),
+				end_pc: allocate_label(u32::from(unresolved.end_pc)),
+				handler_pc: allocate_label(u32::from(unresolved.handler_pc)),
+				catch_type: unresolved.catch_type,
+			})
+			.collect();
 
 		for (pc, _, labels) in &mut code {
 			if let Some(resolved_label) = pc_to_label.get(pc) {
@@ -737,7 +770,7 @@ impl CodeAttribute {
 
 		info.write_u16::<BigEndian>(self.exception_table.len().truncate())?;
 		for exc in &self.exception_table {
-			exc.write(cp, info)?;
+			exc.write(cp, info, &label_positions)?;
 		}
 
 		info.write_u16::<BigEndian>(self.attributes.len().truncate())?;
