@@ -1,9 +1,8 @@
 use std::{collections::HashMap, io::Cursor};
 
-use bytemuck::AnyBitPattern;
-use byteorder::{BigEndian, WriteBytesExt};
+use byteorder::{BigEndian, ReadBytesExt as _, WriteBytesExt};
 use eyre::{Context, Result, bail};
-use num_conv::Truncate;
+use num_conv::{Extend, Truncate};
 use paw_classfile_format::{
 	AttributeInfo, CPTag, InnerClassAccessFlags, ModuleAccessFlags, ModuleExportAccessFlags, ModuleOpenAccessFlags,
 	ModuleRequireAccessFlags, ParameterAccessFlags,
@@ -309,39 +308,11 @@ pub enum LIRCodeAttribute {
 }
 
 impl LIRCodeAttribute {
-	pub fn parse(raw: &AttributeInfo, cp: &ConstantPool) -> Result<Self> {
-		let name = cp.get_utf8(raw.attribute_name_index)?;
-
-		let mut buffer = raw.info.as_slice();
-		let kind = match name.as_ref() {
-			"StackMapTable" => LIRCodeAttribute::StackMapTable(StackMapTableAttribute::parse(&mut buffer, cp)?),
-			"LineNumberTable" => LIRCodeAttribute::LineNumberTable(LineNumberTableAttribute::parse(&mut buffer)?),
-			"LocalVariableTable" => {
-				LIRCodeAttribute::LocalVariableTable(LocalVariableTableAttribute::parse(&mut buffer, cp)?)
-			}
-			"LocalVariableTypeTable" => {
-				LIRCodeAttribute::LocalVariableTypeTable(LocalVariableTypeTableAttribute::parse(&mut buffer, cp)?)
-			}
-			"RuntimeVisibleTypeAnnotations" => LIRCodeAttribute::RuntimeVisibleTypeAnnotations(
-				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
-			),
-			"RuntimeInvisibleTypeAnnotations" => LIRCodeAttribute::RuntimeInvisibleTypeAnnotations(
-				RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
-			),
-			_ => {
-				eprintln!("WARN: unknown attribute {}", name);
-				LIRCodeAttribute::Unknown(name.clone())
-			}
-		};
-
-		let remaining = buffer.len();
-		if remaining != 0 {
-			bail!("{} extra attribute bytes in {} code attribute data", remaining, name);
-		}
-		Ok(kind)
-	}
-
-	pub fn write(&self, cp: &mut ConstantPool) -> Result<AttributeInfo> {
+	pub fn write(
+		&self,
+		cp: &mut ConstantPool,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<AttributeInfo> {
 		let name = match self {
 			LIRCodeAttribute::LineNumberTable(..) => "LineNumberTable",
 			LIRCodeAttribute::LocalVariableTable(..) => "LocalVariableTable",
@@ -356,13 +327,13 @@ impl LIRCodeAttribute {
 
 		match self {
 			LIRCodeAttribute::LineNumberTable(lnt) => {
-				lnt.write(&mut info)?;
+				lnt.write(&mut info, label_positions)?;
 			}
 			LIRCodeAttribute::LocalVariableTable(lvt) => {
-				lvt.write(cp, &mut info)?;
+				lvt.write(cp, &mut info, label_positions)?;
 			}
 			LIRCodeAttribute::LocalVariableTypeTable(lvtt) => {
-				lvtt.write(cp, &mut info)?;
+				lvtt.write(cp, &mut info, label_positions)?;
 			}
 			LIRCodeAttribute::StackMapTable(smt) => {
 				smt.write(cp, &mut info)?;
@@ -605,10 +576,6 @@ impl CodeAttribute {
 				.read_u16::<BigEndian>()
 				.wrap_err("failed to read attributes_count from Code attribute")?,
 		);
-		let attributes = buffer.read_vec_with(attrs_count, |b| {
-			let raw = AttributeInfo::read(b).wrap_err("failed to read attribute from Code attribute")?;
-			LIRCodeAttribute::parse(&raw, cp)
-		})?;
 
 		let mut code_buffer = Cursor::new(code);
 		let mut code: Vec<(u32, Instruction, Vec<LIRLabel>)> = Vec::new();
@@ -691,6 +658,98 @@ impl CodeAttribute {
 				catch_type: unresolved.catch_type,
 			})
 			.collect();
+
+		let attributes = buffer.read_vec_with(attrs_count, |reader| {
+			let raw = AttributeInfo::read(reader).wrap_err("failed to read attribute from Code attribute")?;
+			let name = cp.get_utf8(raw.attribute_name_index)?;
+
+			let mut buffer = raw.info.as_slice();
+			let kind = match name.as_ref() {
+				"StackMapTable" => LIRCodeAttribute::StackMapTable(StackMapTableAttribute::parse(&mut buffer, cp)?),
+				"LineNumberTable" => {
+					let table_len = usize::from(
+						buffer
+							.read_u16::<BigEndian>()
+							.wrap_err("failed to read line_number_table_length from LineNumberTable attribute")?,
+					);
+					let table = buffer.read_vec_with(table_len, |reader| {
+						Ok(LineNumberTableAttributeEntry {
+							start_pc: allocate_label(
+								reader
+									.read_u16::<BigEndian>()
+									.wrap_err(
+										"failed to read line_number_table start_pc from LineNumberTable attribute",
+									)?
+									.extend(),
+							),
+							line_number: reader
+								.read_u16::<BigEndian>()
+								.wrap_err("failed to read line_number_table line_number from SourceFile attribute")?,
+						})
+					})?;
+					LIRCodeAttribute::LineNumberTable(LineNumberTableAttribute { table })
+				}
+				"LocalVariableTable" => {
+					let num_entries =
+						usize::from(buffer.read_u16::<BigEndian>().wrap_err(
+							"failed to read local_variable_table_length from LocalVariableTable attribute",
+						)?);
+					let table = buffer.read_vec_with(num_entries, |reader| {
+						let start_pc = reader.read_u16::<BigEndian>()?;
+						let len = reader.read_u16::<BigEndian>()?;
+						let name_idx = reader.read_u16::<BigEndian>()?;
+						let name = cp.get_utf8(name_idx)?;
+						let descriptor_idx = reader.read_u16::<BigEndian>()?;
+						let descriptor = cp.get_utf8(descriptor_idx)?.parse()?;
+						let local_idx = reader.read_u16::<BigEndian>()?;
+						Ok(LocalVariableTableEntry {
+							start_pc: allocate_label(start_pc.extend()),
+							len,
+							name,
+							descriptor,
+							local_idx,
+						})
+					})?;
+					LIRCodeAttribute::LocalVariableTable(LocalVariableTableAttribute { table })
+				}
+				"LocalVariableTypeTable" => {
+					let num_entries = usize::from(buffer.read_u16::<BigEndian>()?);
+					let table = buffer.read_vec_with(num_entries, |reader| {
+						let start_pc = reader.read_u16::<BigEndian>()?;
+						let len = reader.read_u16::<BigEndian>()?;
+						let name_idx = reader.read_u16::<BigEndian>()?;
+						let name = cp.get_utf8(name_idx)?;
+						let signature_idx = reader.read_u16::<BigEndian>()?;
+						let signature = cp.get_utf8(signature_idx)?;
+						let local_idx = reader.read_u16::<BigEndian>()?;
+						Ok(LocalVariableTypeTableEntry {
+							start_pc: allocate_label(start_pc.extend()),
+							len,
+							name,
+							signature,
+							local_idx,
+						})
+					})?;
+					LIRCodeAttribute::LocalVariableTypeTable(LocalVariableTypeTableAttribute { table })
+				}
+				"RuntimeVisibleTypeAnnotations" => LIRCodeAttribute::RuntimeVisibleTypeAnnotations(
+					RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+				),
+				"RuntimeInvisibleTypeAnnotations" => LIRCodeAttribute::RuntimeInvisibleTypeAnnotations(
+					RuntimeTypeAnnotationsAttribute::parse(&mut buffer, cp)?,
+				),
+				_ => {
+					eprintln!("WARN: unknown attribute {}", name);
+					LIRCodeAttribute::Unknown(name.clone())
+				}
+			};
+
+			let remaining = buffer.len();
+			if remaining != 0 {
+				bail!("{} extra attribute bytes in {} code attribute data", remaining, name);
+			}
+			Ok(kind)
+		})?;
 
 		for (pc, _, labels) in &mut code {
 			if let Some(resolved_label) = pc_to_label.get(pc) {
@@ -775,7 +834,7 @@ impl CodeAttribute {
 
 		info.write_u16::<BigEndian>(self.attributes.len().truncate())?;
 		for attr in &self.attributes {
-			attr.write(cp)?.write(info)?;
+			attr.write(cp, &label_positions)?.write(info)?;
 		}
 
 		Ok(())
@@ -1292,9 +1351,9 @@ impl DebugExtensionAttribute {
 	}
 }
 
-#[derive(Debug, Clone, Copy, AnyBitPattern)]
+#[derive(Debug, Clone, Copy)]
 pub struct LineNumberTableAttributeEntry {
-	pub start_pc: u16,
+	pub start_pc: LIRResolvedLabel,
 	pub line_number: u16,
 }
 
@@ -1304,29 +1363,19 @@ pub struct LineNumberTableAttribute {
 }
 
 impl LineNumberTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
-		let table_len = usize::from(
-			buffer
-				.read_u16::<BigEndian>()
-				.wrap_err("failed to read line_number_table_length from LineNumberTable attribute")?,
-		);
-		let table = buffer.read_vec_with(table_len, |reader| {
-			Ok(LineNumberTableAttributeEntry {
-				start_pc: reader
-					.read_u16::<BigEndian>()
-					.wrap_err("failed to read line_number_table start_pc from LineNumberTable attribute")?,
-				line_number: reader
-					.read_u16::<BigEndian>()
-					.wrap_err("failed to read line_number_table line_number from SourceFile attribute")?,
-			})
-		})?;
-		Ok(Self { table })
-	}
-
-	pub fn write<W: WriteBytesExt>(&self, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
 		info.write_u16::<BigEndian>(self.table.len().truncate())?;
 		for ele in &self.table {
-			info.write_u16::<BigEndian>(ele.start_pc)?;
+			info.write_u16::<BigEndian>(
+				label_positions
+					.get(&ele.start_pc)
+					.unwrap_or_else(|| unreachable!("label was referenced but not attached to an instruction"))
+					.truncate(),
+			)?;
 			info.write_u16::<BigEndian>(ele.line_number)?;
 		}
 		Ok(())
@@ -1335,7 +1384,7 @@ impl LineNumberTableAttribute {
 
 #[derive(Debug, Clone)]
 pub struct LocalVariableTableEntry {
-	pub start_pc: u16,
+	pub start_pc: LIRResolvedLabel,
 	pub len: u16,
 	pub name: String,
 	pub descriptor: Descriptor,
@@ -1343,25 +1392,18 @@ pub struct LocalVariableTableEntry {
 }
 
 impl LocalVariableTableEntry {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
-		let start_pc = buffer.read_u16::<BigEndian>()?;
-		let len = buffer.read_u16::<BigEndian>()?;
-		let name_idx = buffer.read_u16::<BigEndian>()?;
-		let name = cp.get_utf8(name_idx)?;
-		let descriptor_idx = buffer.read_u16::<BigEndian>()?;
-		let descriptor = cp.get_utf8(descriptor_idx)?.parse()?;
-		let local_idx = buffer.read_u16::<BigEndian>()?;
-		Ok(LocalVariableTableEntry {
-			start_pc,
-			len,
-			name,
-			descriptor,
-			local_idx,
-		})
-	}
-
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
-		info.write_u16::<BigEndian>(self.start_pc)?;
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
+		info.write_u16::<BigEndian>(
+			label_positions
+				.get(&self.start_pc)
+				.unwrap_or_else(|| unreachable!("label was referenced but not attached to an instruction"))
+				.truncate(),
+		)?;
 		info.write_u16::<BigEndian>(self.len)?;
 
 		let name_idx = cp.add_utf8(self.name.clone());
@@ -1381,20 +1423,15 @@ pub struct LocalVariableTableAttribute {
 }
 
 impl LocalVariableTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
-		let num_entries = usize::from(
-			buffer
-				.read_u16::<BigEndian>()
-				.wrap_err("failed to read local_variable_table_length from LocalVariableTable attribute")?,
-		);
-		let table = buffer.read_vec_with(num_entries, |b| LocalVariableTableEntry::parse(b, cp))?;
-		Ok(Self { table })
-	}
-
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
 		info.write_u16::<BigEndian>(self.table.len().truncate())?;
 		for ele in &self.table {
-			ele.write(cp, info)?;
+			ele.write(cp, info, label_positions)?;
 		}
 		Ok(())
 	}
@@ -1402,7 +1439,7 @@ impl LocalVariableTableAttribute {
 
 #[derive(Debug, Clone)]
 pub struct LocalVariableTypeTableEntry {
-	pub start_pc: u16,
+	pub start_pc: LIRResolvedLabel,
 	pub len: u16,
 	pub name: String,
 	// FIXME: strutured data for this
@@ -1411,25 +1448,18 @@ pub struct LocalVariableTypeTableEntry {
 }
 
 impl LocalVariableTypeTableEntry {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
-		let start_pc = buffer.read_u16::<BigEndian>()?;
-		let len = buffer.read_u16::<BigEndian>()?;
-		let name_idx = buffer.read_u16::<BigEndian>()?;
-		let name = cp.get_utf8(name_idx)?;
-		let signature_idx = buffer.read_u16::<BigEndian>()?;
-		let signature = cp.get_utf8(signature_idx)?;
-		let local_idx = buffer.read_u16::<BigEndian>()?;
-		Ok(LocalVariableTypeTableEntry {
-			start_pc,
-			len,
-			name,
-			signature,
-			local_idx,
-		})
-	}
-
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
-		info.write_u16::<BigEndian>(self.start_pc)?;
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
+		info.write_u16::<BigEndian>(
+			label_positions
+				.get(&self.start_pc)
+				.unwrap_or_else(|| unreachable!("label was referenced but not attached to an instruction"))
+				.truncate(),
+		)?;
 		info.write_u16::<BigEndian>(self.len)?;
 
 		let name_idx = cp.add_utf8(self.name.clone());
@@ -1449,16 +1479,15 @@ pub struct LocalVariableTypeTableAttribute {
 }
 
 impl LocalVariableTypeTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
-		let num_entries = usize::from(buffer.read_u16::<BigEndian>()?);
-		let table = buffer.read_vec_with(num_entries, |reader| LocalVariableTypeTableEntry::read(reader, cp))?;
-		Ok(Self { table })
-	}
-
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
 		info.write_u16::<BigEndian>(self.table.len().truncate())?;
 		for ele in &self.table {
-			ele.write(cp, info)?;
+			ele.write(cp, info, label_positions)?;
 		}
 		Ok(())
 	}
