@@ -31,7 +31,7 @@
           packages = [
             rustToolchain
             jdk
-            pkgs.rust-analyzer-nightly
+            pkgs.rust-analyzer
           ];
 
           shellHook = ''
