@@ -336,7 +336,7 @@ impl LIRCodeAttribute {
 				lvtt.write(cp, &mut info, label_positions)?;
 			}
 			LIRCodeAttribute::StackMapTable(smt) => {
-				smt.write(cp, &mut info)?;
+				smt.write(cp, &mut info, label_positions)?;
 			}
 			LIRCodeAttribute::RuntimeVisibleTypeAnnotations(rta)
 			| LIRCodeAttribute::RuntimeInvisibleTypeAnnotations(rta) => {
@@ -665,7 +665,11 @@ impl CodeAttribute {
 
 			let mut buffer = raw.info.as_slice();
 			let kind = match name.as_ref() {
-				"StackMapTable" => LIRCodeAttribute::StackMapTable(StackMapTableAttribute::parse(&mut buffer, cp)?),
+				"StackMapTable" => LIRCodeAttribute::StackMapTable(StackMapTableAttribute::parse(
+					&mut buffer,
+					cp,
+					&mut allocate_label,
+				)?),
 				"LineNumberTable" => {
 					let table_len = usize::from(
 						buffer
@@ -922,150 +926,222 @@ impl Default for AppendFrameLocals {
 pub enum StackMapFrame {
 	SameFrame {
 		frame_type: SameFrameType,
+		pc: LIRResolvedLabel,
 	},
 	SameLocals1StackItemFrame {
 		frame_type: SameLocals1StackItemFrameType,
 		stack: VerificationTypeInfo,
+		pc: LIRResolvedLabel,
 	},
 	SameLocals1StackItemFrameExtended {
-		offset_delta: u16,
 		stack: VerificationTypeInfo,
+		pc: LIRResolvedLabel,
 	},
 	ChopFrame {
 		absent_locals_count: ChopFrameAbsentLocals,
-		offset_delta: u16,
+		pc: LIRResolvedLabel,
 	},
 	SameFrameExtended {
-		offset_delta: u16,
+		pc: LIRResolvedLabel,
 	},
 	AppendFrame {
-		offset_delta: u16,
 		locals: AppendFrameLocals,
+		pc: LIRResolvedLabel,
 	},
 	FullFrame {
-		offset_delta: u16,
 		locals: Vec<VerificationTypeInfo>,
 		stack: Vec<VerificationTypeInfo>,
+		pc: LIRResolvedLabel,
 	},
 }
 
 impl StackMapFrame {
 	#[must_use]
-	pub const fn offset_delta(&self) -> u16 {
+	pub const fn pc(&self) -> LIRResolvedLabel {
 		match self {
-			StackMapFrame::SameFrame {
-				frame_type: SameFrameType(frame_type),
-			} => *frame_type as u16,
-			StackMapFrame::SameLocals1StackItemFrame {
-				frame_type: SameLocals1StackItemFrameType(frame_type),
-				..
-			} => *frame_type as u16 - 64,
-			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, .. }
-			| StackMapFrame::ChopFrame { offset_delta, .. }
-			| StackMapFrame::SameFrameExtended { offset_delta, .. }
-			| StackMapFrame::AppendFrame { offset_delta, .. }
-			| StackMapFrame::FullFrame { offset_delta, .. } => *offset_delta,
+			StackMapFrame::SameFrame { pc, .. }
+			| StackMapFrame::SameLocals1StackItemFrame { pc, .. }
+			| StackMapFrame::SameLocals1StackItemFrameExtended { pc, .. }
+			| StackMapFrame::ChopFrame { pc, .. }
+			| StackMapFrame::SameFrameExtended { pc, .. }
+			| StackMapFrame::AppendFrame { pc, .. }
+			| StackMapFrame::FullFrame { pc, .. } => *pc,
 		}
 	}
 
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(
+		buffer: &mut B,
+		cp: &ConstantPool,
+		allocate_label: &mut impl FnMut(u32) -> LIRResolvedLabel,
+		prev_frame_pc: u32,
+	) -> Result<(Self, u32)> {
 		let frame_type = buffer.read_u8()?;
 		let frame = match frame_type {
-			0..=63 => Self::SameFrame {
-				frame_type: SameFrameType::new(frame_type)?,
-			},
-			64..=127 => Self::SameLocals1StackItemFrame {
-				frame_type: SameLocals1StackItemFrameType::new(frame_type)?,
-				stack: VerificationTypeInfo::parse(buffer, cp)?,
-			},
-			247 => Self::SameLocals1StackItemFrameExtended {
-				offset_delta: buffer.read_u16::<BigEndian>()?,
-				stack: VerificationTypeInfo::parse(buffer, cp)?,
-			},
-			248..=250 => Self::ChopFrame {
-				/*
-				   The frame type chop_frame is represented by tags in the range [248-250]. If the frame_type is chop_frame,-
-				   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
-				   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
-				*/
-				absent_locals_count: ChopFrameAbsentLocals::new(251 - frame_type)?,
-				offset_delta: buffer.read_u16::<BigEndian>()?,
-			},
-			251 => Self::SameFrameExtended {
-				offset_delta: buffer.read_u16::<BigEndian>()?,
-			},
+			0..=63 => {
+				let offset_delta = frame_type as u32;
+				let absolute_pc = prev_frame_pc.wrapping_add(offset_delta).wrapping_add(1);
+				(
+					Self::SameFrame {
+						frame_type: SameFrameType::new(frame_type)?,
+						pc: allocate_label(absolute_pc),
+					},
+					absolute_pc,
+				)
+			}
+			64..=127 => {
+				let offset_delta = (frame_type - 64) as u32;
+				let absolute_pc = prev_frame_pc.wrapping_add(offset_delta).wrapping_add(1);
+				(
+					Self::SameLocals1StackItemFrame {
+						frame_type: SameLocals1StackItemFrameType::new(frame_type)?,
+						pc: allocate_label(absolute_pc),
+						stack: VerificationTypeInfo::parse(buffer, cp, allocate_label)?,
+					},
+					absolute_pc,
+				)
+			}
+			247 => {
+				let offset_delta = buffer.read_u16::<BigEndian>()? as u32;
+				let absolute_pc = prev_frame_pc.wrapping_add(offset_delta).wrapping_add(1);
+				(
+					Self::SameLocals1StackItemFrameExtended {
+						pc: allocate_label(absolute_pc),
+						stack: VerificationTypeInfo::parse(buffer, cp, allocate_label)?,
+					},
+					absolute_pc,
+				)
+			}
+			248..=250 => {
+				let offset_delta = buffer.read_u16::<BigEndian>()? as u32;
+				let absolute_pc = prev_frame_pc.wrapping_add(offset_delta).wrapping_add(1);
+				(
+					Self::ChopFrame {
+						absent_locals_count: ChopFrameAbsentLocals::new(251 - frame_type)?,
+						pc: allocate_label(absolute_pc),
+					},
+					absolute_pc,
+				)
+			}
+			251 => {
+				let offset_delta = buffer.read_u16::<BigEndian>()? as u32;
+				let absolute_pc = prev_frame_pc.wrapping_add(offset_delta).wrapping_add(1);
+				(
+					Self::SameFrameExtended {
+						pc: allocate_label(absolute_pc),
+					},
+					absolute_pc,
+				)
+			}
 			252..=254 => {
-				let offset_delta = buffer.read_u16::<BigEndian>()?;
+				let offset_delta = buffer.read_u16::<BigEndian>()? as u32;
+				let absolute_pc = prev_frame_pc.wrapping_add(offset_delta).wrapping_add(1);
 
 				let n_locals = (frame_type - 251) as usize;
-				let locals = buffer.read_vec_with(n_locals, |b| VerificationTypeInfo::parse(b, cp))?;
-				Self::AppendFrame {
-					offset_delta,
-					locals: AppendFrameLocals::from_vec(locals)?,
-				}
+				let locals = buffer.read_vec_with(n_locals, |b| VerificationTypeInfo::parse(b, cp, allocate_label))?;
+				(
+					Self::AppendFrame {
+						pc: allocate_label(absolute_pc),
+						locals: AppendFrameLocals::from_vec(locals)?,
+					},
+					absolute_pc,
+				)
 			}
 			255 => {
-				let offset_delta = buffer.read_u16::<BigEndian>()?;
+				let offset_delta = buffer.read_u16::<BigEndian>()? as u32;
+				let absolute_pc = prev_frame_pc.wrapping_add(offset_delta).wrapping_add(1);
+
 				let n_locals = buffer.read_u16::<BigEndian>()? as usize;
 				let mut locals = Vec::with_capacity(n_locals);
 				for _ in 0..n_locals {
-					locals.push(VerificationTypeInfo::parse(buffer, cp)?);
+					locals.push(VerificationTypeInfo::parse(buffer, cp, allocate_label)?);
 				}
 
 				let n_stack = buffer.read_u16::<BigEndian>()? as usize;
 				let mut stack = Vec::with_capacity(n_stack);
 				for _ in 0..n_stack {
-					stack.push(VerificationTypeInfo::parse(buffer, cp)?);
+					stack.push(VerificationTypeInfo::parse(buffer, cp, allocate_label)?);
 				}
 
-				Self::FullFrame {
-					offset_delta,
-					locals,
-					stack,
-				}
+				(
+					Self::FullFrame {
+						pc: allocate_label(absolute_pc),
+						locals,
+						stack,
+					},
+					absolute_pc,
+				)
 			}
 			_ => bail!("invalid frame tag {frame_type}"),
 		};
 		Ok(frame)
 	}
 
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+		prev_frame_pc: u32,
+	) -> Result<()> {
+		let frame_pc = *label_positions
+			.get(&self.pc())
+			.ok_or_else(|| unreachable!("label was referenced but not attached to an instruction"))?;
+
+		// offset_delta = frame_pc - prev_frame_pc - 1
+		let offset_delta = frame_pc.wrapping_sub(prev_frame_pc).wrapping_sub(1);
+		if frame_pc <= prev_frame_pc && prev_frame_pc != u32::MAX {
+			bail!(
+				"bad stack map frame ordering: frame at {} cannot follow frame at {}",
+				frame_pc,
+				prev_frame_pc
+			);
+		}
+
 		match self {
-			StackMapFrame::SameFrame { frame_type } => {
-				info.write_u8(frame_type.0)?;
+			StackMapFrame::SameFrame { frame_type, .. } => {
+				// offset_delta must fit in 0..=63 for SameFrame
+				if offset_delta > 63 {
+					bail!(
+						"offset_delta {} too large for SameFrame (max 63), use SameFrameExtended",
+						offset_delta
+					);
+				}
+				info.write_u8(offset_delta.truncate())?;
 			}
-			StackMapFrame::SameLocals1StackItemFrame { frame_type, stack } => {
-				info.write_u8(frame_type.0)?;
-				stack.write(cp, info)?;
+			StackMapFrame::SameLocals1StackItemFrame { stack, .. } => {
+				// offset_delta must fit in 0..=63 for SameLocals1StackItemFrame
+				if offset_delta > 63 {
+					bail!(
+						"offset_delta {} too large for SameLocals1StackItemFrame (max 63), use Extended variant",
+						offset_delta
+					);
+				}
+				info.write_u8((64 + offset_delta).truncate())?;
+				stack.write(cp, info, label_positions)?;
 			}
-			StackMapFrame::SameLocals1StackItemFrameExtended { offset_delta, stack } => {
+			StackMapFrame::SameLocals1StackItemFrameExtended { stack, .. } => {
 				info.write_u8(247)?;
-				info.write_u16::<BigEndian>(*offset_delta)?;
-				stack.write(cp, info)?;
+				info.write_u16::<BigEndian>(offset_delta.truncate())?;
+				stack.write(cp, info, label_positions)?;
 			}
 			StackMapFrame::ChopFrame {
 				absent_locals_count: ChopFrameAbsentLocals(absent_locals_count),
-				offset_delta,
+				..
 			} => {
-				/*
-				   The frame type chop_frame is represented by tags in the range [248-250]. If the frame_type is chop_frame,-
-				   it means that the operand stack is empty and the current locals are the same as the locals in the previous frame,-
-				   except that the k last locals are absent. The value of k is given by the formula 251 - frame_type.
-				*/
 				let frame_type = 251_u8
 					.checked_sub(*absent_locals_count)
 					.ok_or_else(|| eyre::eyre!("Invalid chopframe absent locals count: {}", absent_locals_count))?;
 
 				info.write_u8(frame_type)?;
-				info.write_u16::<BigEndian>(*offset_delta)?;
+				info.write_u16::<BigEndian>(offset_delta.truncate())?;
 			}
-			StackMapFrame::SameFrameExtended { offset_delta } => {
+			StackMapFrame::SameFrameExtended { .. } => {
 				info.write_u8(251)?;
-				info.write_u16::<BigEndian>(*offset_delta)?;
+				info.write_u16::<BigEndian>(offset_delta.truncate())?;
 			}
 			StackMapFrame::AppendFrame {
-				offset_delta,
 				locals: AppendFrameLocals(locals),
+				..
 			} => {
 				let n_locals = locals.len().truncate::<u8>();
 				let frame_type = 251 + n_locals;
@@ -1076,25 +1152,21 @@ impl StackMapFrame {
 				);
 
 				info.write_u8(frame_type)?;
-				info.write_u16::<BigEndian>(*offset_delta)?;
+				info.write_u16::<BigEndian>(offset_delta.truncate())?;
 				for local in locals {
-					local.write(cp, info)?;
+					local.write(cp, info, label_positions)?;
 				}
 			}
-			StackMapFrame::FullFrame {
-				offset_delta,
-				locals,
-				stack,
-			} => {
+			StackMapFrame::FullFrame { locals, stack, .. } => {
 				info.write_u8(255)?;
-				info.write_u16::<BigEndian>(*offset_delta)?;
+				info.write_u16::<BigEndian>(offset_delta.truncate())?;
 				info.write_u16::<BigEndian>(locals.len().truncate())?;
 				for local in locals {
-					local.write(cp, info)?;
+					local.write(cp, info, label_positions)?;
 				}
 				info.write_u16::<BigEndian>(stack.len().truncate())?;
 				for s in stack {
-					s.write(cp, info)?;
+					s.write(cp, info, label_positions)?;
 				}
 			}
 		}
@@ -1108,20 +1180,43 @@ pub struct StackMapTableAttribute {
 }
 
 impl StackMapTableAttribute {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(
+		buffer: &mut B,
+		cp: &ConstantPool,
+		allocate_label: &mut impl FnMut(u32) -> LIRResolvedLabel,
+	) -> Result<Self> {
 		let entries_count = usize::from(
 			buffer
 				.read_u16::<BigEndian>()
 				.wrap_err("failed to read number_of_entries from StackMapTable attribute")?,
 		);
-		let entries = buffer.read_vec_with(entries_count, |b| StackMapFrame::parse(b, cp))?;
+
+		let mut entries = Vec::with_capacity(entries_count);
+		let mut prev_frame_pc = u32::MAX;
+
+		for _ in 0..entries_count {
+			let (frame, absolute_pc) = StackMapFrame::parse(buffer, cp, allocate_label, prev_frame_pc)?;
+			prev_frame_pc = absolute_pc;
+			entries.push(frame);
+		}
+
 		Ok(StackMapTableAttribute { entries })
 	}
 
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
 		info.write_u16::<BigEndian>(self.entries.len().truncate())?;
+
+		let mut prev_frame_pc = u32::MAX;
 		for entry in &self.entries {
-			entry.write(cp, info)?;
+			entry.write(cp, info, label_positions, prev_frame_pc)?;
+			prev_frame_pc = *label_positions
+				.get(&entry.pc())
+				.ok_or_else(|| unreachable!("label was referenced but not attached to an instruction"))?;
 		}
 		Ok(())
 	}
@@ -2335,11 +2430,15 @@ pub enum VerificationTypeInfo {
 	NullVariableInfo = 5,
 	UninitializedThisVariableInfo = 6,
 	ObjectVariableInfo { class_name: String } = 7,
-	UninitializedVariableInfo { offset: u16 } = 8,
+	UninitializedVariableInfo { new_instruction_pc: LIRResolvedLabel } = 8,
 }
 
 impl VerificationTypeInfo {
-	pub fn parse<B: ReadBytesExt>(buffer: &mut B, cp: &ConstantPool) -> Result<Self> {
+	pub fn parse<B: ReadBytesExt>(
+		buffer: &mut B,
+		cp: &ConstantPool,
+		allocate_label: &mut impl FnMut(u32) -> LIRResolvedLabel,
+	) -> Result<Self> {
 		let tag = buffer.read_u8()?;
 		Ok(match tag {
 			0 => Self::TopVariableInfo,
@@ -2352,14 +2451,22 @@ impl VerificationTypeInfo {
 			7 => Self::ObjectVariableInfo {
 				class_name: cp.resolve_class_name(cp.get_class(buffer.read_u16::<BigEndian>()?)?)?,
 			},
-			8 => Self::UninitializedVariableInfo {
-				offset: buffer.read_u16::<BigEndian>()?,
-			},
+			8 => {
+				let offset = buffer.read_u16::<BigEndian>()? as u32;
+				Self::UninitializedVariableInfo {
+					new_instruction_pc: allocate_label(offset),
+				}
+			}
 			tag => bail!("Unrecognized verification type info tag: {tag}"),
 		})
 	}
 
-	pub fn write<W: WriteBytesExt>(&self, cp: &mut ConstantPool, info: &mut W) -> Result<()> {
+	pub fn write<W: WriteBytesExt>(
+		&self,
+		cp: &mut ConstantPool,
+		info: &mut W,
+		label_positions: &HashMap<LIRResolvedLabel, u32>,
+	) -> Result<()> {
 		match self {
 			VerificationTypeInfo::TopVariableInfo => info.write_u8(0)?,
 			VerificationTypeInfo::IntegerVariableInfo => info.write_u8(1)?,
@@ -2373,9 +2480,12 @@ impl VerificationTypeInfo {
 				let idx = cp.add_class(class_name.clone());
 				info.write_u16::<BigEndian>(idx)?;
 			}
-			VerificationTypeInfo::UninitializedVariableInfo { offset } => {
+			VerificationTypeInfo::UninitializedVariableInfo { new_instruction_pc } => {
 				info.write_u8(8)?;
-				info.write_u16::<BigEndian>(*offset)?;
+				let offset = *label_positions
+					.get(new_instruction_pc)
+					.ok_or_else(|| unreachable!("label was referenced but not attached to an instruction",))?;
+				info.write_u16::<BigEndian>(offset.truncate())?;
 			}
 		}
 		Ok(())
