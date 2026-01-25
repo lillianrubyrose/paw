@@ -1,10 +1,10 @@
 //! Fast and simple MUTF-8 encoder/decoder.
 //!
-//! <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.7>
+//! <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.7>
+
+#![forbid(unsafe_code)] // prevent finding fork in kitchen
 
 use std::borrow::Cow;
-
-use num_conv::Truncate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Mutf8DecodeError {
@@ -40,61 +40,44 @@ pub fn encode<S: AsRef<str> + ?Sized>(input: &S) -> Cow<'_, [u8]> {
 		return Cow::Borrowed(input.as_bytes());
 	}
 
-	encode_slow(input.as_bytes(), encoded_len)
-}
+	let mut output = Vec::with_capacity(encoded_len);
+	for c in input.chars() {
+		let cp = c as u32;
+		match cp {
+			0x0001..=0x007F => {
+				output.push(cp as u8);
+			}
+			0x0000 | 0x0080..=0x07FF => {
+				let x = 0b110_00000 | ((cp >> 6) & 0x1F) as u8;
+				let y = 0b10_000000 | (cp & 0x3F) as u8;
+				output.push(x);
+				output.push(y);
+			}
+			0x0800..=0xFFFF => {
+				let x = 0b1110_0000 | ((cp >> 12) & 0x0F) as u8;
+				let y = 0b10_000000 | ((cp >> 6) & 0x3F) as u8;
+				let z = 0b10_000000 | (cp & 0x3F) as u8;
+				output.push(x);
+				output.push(y);
+				output.push(z);
+			}
 
-#[cold]
-fn encode_slow(input: &[u8], capacity: usize) -> Cow<'_, [u8]> {
-	let mut output = Vec::with_capacity(capacity);
-	let mut i = 0;
-	let len = input.len();
-
-	while i < len {
-		// SAFETY: Loop ensures this condition
-		let b = unsafe { *input.get_unchecked(i) };
-		if b == 0x00 {
-			// 0x00 -> 0xC0 0x80
-			output.extend_from_slice(&[0xC0, 0x80]);
-			i += 1;
-		} else if b < 0xF0 {
-			// Just push if it's a 1-3 byte sequence
-			output.push(b);
-			i += 1;
-		} else {
-			// 4-byte sequence -> surrogate pair
-			debug_assert!(i + 3 < len);
-
-			// SAFETY: The passed string slice should always be valid UTF-8,
-			//         ensuring that 4 bytes exist starting at 0xF0
-			let b1 = b;
-			let b2 = unsafe { *input.get_unchecked(i + 1) };
-			let b3 = unsafe { *input.get_unchecked(i + 2) };
-			let b4 = unsafe { *input.get_unchecked(i + 3) };
-
-			let codepoint = ((u32::from(b1) & 0x07) << 18)
-				| ((u32::from(b2) & 0x3F) << 12)
-				| ((u32::from(b3) & 0x3F) << 6)
-				| (u32::from(b4) & 0x3F);
-
-			// UTF-16 surrogate pair
-			let offset = codepoint - 0x10000;
-			let high = 0xD800 | ((offset >> 10).truncate::<u16>());
-			let low = 0xDC00 | ((offset & 0x3FF).truncate::<u16>());
-
-			output.push(0xE0 | ((high >> 12) as u8));
-			output.push(0x80 | (((high >> 6) & 0x3F) as u8));
-			output.push(0x80 | ((high & 0x3F) as u8));
-
-			output.push(0xE0 | ((low >> 12) as u8));
-			output.push(0x80 | (((low >> 6) & 0x3F) as u8));
-			output.push(0x80 | ((low & 0x3F) as u8));
-
-			i += 4;
+			_ => {
+				let u = 0b1110_1101;
+				let v = 0b1010_0000 | (((cp >> 16) & 0x1F) - 1) as u8;
+				let w = 0b10_000000 | ((cp >> 10) & 0x3F) as u8;
+				let x = 0b1110_1101;
+				let y = 0b1011_0000 | ((cp >> 6) & 0x0F) as u8;
+				let z = 0b10_000000 | (cp & 0x3F) as u8;
+				output.push(u);
+				output.push(v);
+				output.push(w);
+				output.push(x);
+				output.push(y);
+				output.push(z);
+			}
 		}
 	}
-
-	// This would indicate a bug in our encode_len function
-	debug_assert_eq!(output.capacity(), capacity);
 
 	Cow::Owned(output)
 }
@@ -106,97 +89,78 @@ pub fn decode(input: &[u8]) -> Result<Cow<'_, str>, Mutf8DecodeError> {
 		return Ok(Cow::Borrowed(s));
 	}
 
-	decode_slow(input).map(Cow::Owned)
-}
-
-#[cold]
-fn decode_slow(input: &[u8]) -> Result<String, Mutf8DecodeError> {
-	let mut out = String::with_capacity(input.len());
-
+	let mut output = String::with_capacity(input.len());
 	let mut i = 0;
-	let len = input.len();
+	while i < input.len() {
+		let b1 = input[i];
 
-	while i < len {
-		// SAFETY: Loop ensures this condition
-		let b1 = unsafe { *input.get_unchecked(i) };
-		i += 1;
-
-		if b1 < 0x80 {
-			out.push(char::from(b1));
-		} else if b1 < 0xE0 {
-			// 2-byte sequence
-			if i >= len {
-				return Err(Mutf8DecodeError::UnexpectedEnd);
-			}
-
-			// SAFETY: i < len checked above
-			let b2 = unsafe { *input.get_unchecked(i) };
+		if (b1 & 0b1000_0000) == 0b0000_0000 {
+			output.push(b1 as char);
 			i += 1;
-
-			if b1 == 0xC0 && b2 == 0x80 {
-				out.push('\0');
-			} else {
-				if b2 & 0xC0 != 0x80 {
-					return Err(Mutf8DecodeError::InvalidSequence);
-				}
-
-				out.push(char::from(b1));
-				out.push(char::from(b2));
+		} else if (b1 & 0b1110_0000) == 0b1100_0000 {
+			let b2 = *input.get(i + 1).ok_or(Mutf8DecodeError::UnexpectedEnd)?;
+			if (b2 & 0b1100_0000) != 0b1000_0000 {
+				return Err(Mutf8DecodeError::InvalidSequence);
 			}
-		} else if b1 < 0xF0 {
-			// 3-byte sequence
-			if i + 1 >= len {
-				return Err(Mutf8DecodeError::UnexpectedEnd);
-			}
-
-			// SAFETY: i + 1 < len checked above
-			let b2 = unsafe { *input.get_unchecked(i) };
-			let b3 = unsafe { *input.get_unchecked(i + 1) };
+			let x = (b1 & 0x1F) as u32;
+			let y = (b2 & 0x3F) as u32;
+			output.push(char::from_u32((x << 6) | y).ok_or(Mutf8DecodeError::InvalidSequence)?);
 			i += 2;
+		} else if (b1 & 0b1111_0000) == 0b1110_0000 {
+			let b2 = *input.get(i + 1).ok_or(Mutf8DecodeError::UnexpectedEnd)?;
+			if (b2 & 0b1100_0000) != 0b1000_0000 {
+				return Err(Mutf8DecodeError::InvalidSequence);
+			}
+			let b3 = *input.get(i + 2).ok_or(Mutf8DecodeError::UnexpectedEnd)?;
+			if (b3 & 0b1100_0000) != 0b1000_0000 {
+				return Err(Mutf8DecodeError::InvalidSequence);
+			}
 
-			if b1 == 0xED && (0xA0..=0xAF).contains(&b2) {
-				// A low surrogate should follow a high surrogate
-				if i + 2 >= len {
-					return Err(Mutf8DecodeError::UnexpectedEnd);
-				}
-
-				// SAFETY: i + 2 < len checked above
-				let b4 = unsafe { *input.get_unchecked(i) };
-				let b5 = unsafe { *input.get_unchecked(i + 1) };
-				let b6 = unsafe { *input.get_unchecked(i + 2) };
-				i += 3;
-
-				// Low surrgate should be 0xED or 0xB0..0xBF
-				if b4 != 0xED || !(0xB0..=0xBF).contains(&b5) {
-					return Err(Mutf8DecodeError::InvalidSurrogate);
-				}
-
-				let high = ((u32::from(b1) & 0x0F) << 12) | ((u32::from(b2) & 0x3F) << 6) | (u32::from(b3) & 0x3F);
-				let low = ((u32::from(b4) & 0x0F) << 12) | ((u32::from(b5) & 0x3F) << 6) | (u32::from(b6) & 0x3F);
-
-				let codepoint = 0x10000 + (((high & 0x3FF) << 10) | (low & 0x3FF));
-
-				out.push(char::from(0xF0 | ((codepoint >> 18).truncate::<u8>())));
-				out.push(char::from(0x80 | (((codepoint >> 12) & 0x3F) as u8)));
-				out.push(char::from(0x80 | (((codepoint >> 6) & 0x3F) as u8)));
-				out.push(char::from(0x80 | ((codepoint & 0x3F) as u8)));
-			} else {
-				// Standard 3-byte sequence
-				if (b2 & 0xC0 != 0x80) || (b3 & 0xC0 != 0x80) {
+			// surrogate pair
+			if b1 == 0b1110_1101 {
+				// additional requirement on b2 for surrogate pair
+				if (b2 & 0b1111_0000) != 0b1010_0000 {
 					return Err(Mutf8DecodeError::InvalidSequence);
 				}
 
-				out.push(char::from(b1));
-				out.push(char::from(b2));
-				out.push(char::from(b3));
+				let b4 = *input.get(i + 3).ok_or(Mutf8DecodeError::UnexpectedEnd)?;
+				if b4 != 0b1110_1101 {
+					return Err(Mutf8DecodeError::InvalidSequence);
+				}
+				let b5 = *input.get(i + 4).ok_or(Mutf8DecodeError::UnexpectedEnd)?;
+				if (b5 & 0b1111_0000) != 0b1011_0000 {
+					return Err(Mutf8DecodeError::InvalidSequence);
+				}
+				let b6 = *input.get(i + 5).ok_or(Mutf8DecodeError::UnexpectedEnd)?;
+				if (b6 & 0b1100_0000) != 0b1000_0000 {
+					return Err(Mutf8DecodeError::InvalidSequence);
+				}
+
+				let w1 = (b2 as u32 & 0x0F) << 6;
+				let w2 = b3 as u32 & 0x3F;
+				let w = w1 | w2;
+
+				let z1 = (b5 as u32 & 0x0F) << 6;
+				let z2 = b6 as u32 & 0x3F;
+				let z = z1 | z2;
+
+				let cp = 0x10000 + ((w << 10) | z);
+				output.push(char::from_u32(cp).unwrap());
+
+				i += 6;
+			} else {
+				let x = (b1 & 0x0F) as u32;
+				let y = (b2 & 0x3F) as u32;
+				let z = (b3 & 0x3F) as u32;
+				output.push(char::from_u32((x << 12) | (y << 6) | z).ok_or(Mutf8DecodeError::InvalidSequence)?);
+				i += 3;
 			}
 		} else {
-			// 4-byte sequences aren't valid MUTF-8
 			return Err(Mutf8DecodeError::InvalidSequence);
 		}
 	}
 
-	Ok(out)
+	Ok(Cow::Owned(output))
 }
 
 #[cfg(test)]
@@ -204,11 +168,12 @@ mod tests {
 	use super::{decode, encode};
 
 	#[test]
-	fn test() {
+	fn test_mutf8() {
 		let cases = ["Hello, World!", "Hello\0World", "Hello 世界!", "🚀"];
 		for input in cases {
 			let encoded = encode(input);
-			let decoded = decode(&encoded).expect("to not fail");
+			let decoded = decode(&encoded)
+				.unwrap_or_else(|e| panic!("err {:?} when round tripping {:?} encoded {:?}", e, input, encoded));
 			assert_eq!(decoded, input);
 		}
 	}

@@ -8,4 +8,3 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
-num-conv = "0.2.0"

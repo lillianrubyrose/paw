@@ -618,7 +618,6 @@ dependencies = [
 name = "paw_mutf8"
 version = "0.0.1-dev"
 dependencies = [
- "num-conv 0.2.0",
  "thiserror",
 ]
 
