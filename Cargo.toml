@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/paw_bin",
+    # "crates/paw_bin",
     "crates/paw_classfile",
-    "crates/paw_lir",
+    # "crates/paw_lir",
     "crates/paw_mutf8",
 ]
 

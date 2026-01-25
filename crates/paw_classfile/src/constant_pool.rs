@@ -1,4 +1,5 @@
 use core::fmt;
+use std::{collections::HashMap, fmt::Display, hash::Hash};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use eyre::Result;
@@ -17,11 +18,29 @@ pub enum CPEntry {
 }
 
 pub struct ConstantPool {
-	tags: Vec<CPEntry>,
+	next_idx: ConstantPoolIndex,
+	tags: HashMap<ConstantPoolIndex, CPTag>,
+	by_tag: HashMap<CPTag, ConstantPoolIndex>,
 }
 
-// FIXME: newtype this for actual type safety
-pub type ConstantPoolIndex = u16;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConstantPoolIndex(u16);
+
+impl ConstantPoolIndex {
+	pub fn get(&self) -> u16 {
+		self.0
+	}
+
+	pub(crate) fn new_internal(val: u16) -> Self {
+		Self(val)
+	}
+}
+
+impl Display for ConstantPoolIndex {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
 
 #[derive(Debug, Clone, Error)]
 pub enum ConstantPoolIndexErr {
@@ -37,8 +56,12 @@ pub enum ConstantPoolIndexErr {
 
 impl ConstantPool {
 	#[must_use]
-	pub const fn new() -> Self {
-		Self { tags: Vec::new() }
+	pub fn new() -> Self {
+		Self {
+			next_idx: ConstantPoolIndex::new_internal(1),
+			tags: HashMap::new(),
+			by_tag: HashMap::new(),
+		}
 	}
 
 	#[must_use]
@@ -52,17 +75,10 @@ impl ConstantPool {
 	}
 
 	pub fn get_tag(&self, idx: ConstantPoolIndex) -> Result<&CPTag, ConstantPoolIndexErr> {
-		let checked_idx_sub = (idx as usize)
-			.checked_sub(1)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?;
-		match self
+		Ok(self
 			.tags
-			.get(checked_idx_sub)
-			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?
-		{
-			CPEntry::Tag(tag) => Ok(tag),
-			CPEntry::Padding => Err(ConstantPoolIndexErr::PaddingEntry(idx)),
-		}
+			.get(&idx)
+			.ok_or(ConstantPoolIndexErr::IndexOutOfRange(idx, self.tags.len()))?)
 	}
 
 	pub fn get_utf8(&self, idx: ConstantPoolIndex) -> Result<String, ConstantPoolIndexErr> {
@@ -233,208 +249,119 @@ impl ConstantPool {
 		Ok(name)
 	}
 
-	pub fn push(&mut self, tag: CPTag) -> u16 {
-		self.tags.push(CPEntry::Tag(tag));
-		self.len().truncate()
+	pub fn push(&mut self, tag: CPTag) -> ConstantPoolIndex {
+		let idx = *self.by_tag.entry(tag.clone()).or_insert_with(|| {
+			let idx = self.next_idx;
+			let next_idx = self.next_idx.get() + tag.idx_len();
+			self.next_idx = ConstantPoolIndex::new_internal(next_idx);
+			idx
+		});
+		self.tags.insert(idx, tag);
+		idx
 	}
 
-	pub fn add_utf8(&mut self, val: String) -> u16 {
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Utf8(t)) if t.value == val))
-		{
-			return (idx + 1).truncate();
-		}
+	pub fn add_utf8(&mut self, val: String) -> ConstantPoolIndex {
 		self.push(CPTag::Utf8(Utf8Tag { value: val }))
 	}
 
-	pub fn add_class(&mut self, name: String) -> u16 {
+	pub fn add_class(&mut self, name: String) -> ConstantPoolIndex {
 		let name_index = self.add_utf8(name);
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Class(t)) if t.name_index == name_index))
-		{
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::Class(ClassTag { name_index }))
 	}
 
-	pub fn add_string(&mut self, val: String) -> u16 {
+	pub fn add_string(&mut self, val: String) -> ConstantPoolIndex {
 		let utf8_index = self.add_utf8(val);
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::String(t)) if t.utf8_index == utf8_index))
-		{
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::String(StringTag { utf8_index }))
 	}
 
-	pub fn add_integer(&mut self, val: u32) -> u16 {
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Integer(v)) if *v == val))
-		{
-			return (idx + 1).truncate();
-		}
+	pub fn add_integer(&mut self, val: u32) -> ConstantPoolIndex {
 		self.push(CPTag::Integer(val))
 	}
 
-	pub fn add_float(&mut self, val: f32) -> u16 {
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Float(v)) if v.eq(&val)))
-		{
-			return (idx + 1).truncate();
-		}
+	pub fn add_float(&mut self, val: f32) -> ConstantPoolIndex {
 		self.push(CPTag::Float(val))
 	}
 
-	pub fn add_long(&mut self, val: u64) -> u16 {
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Long(v)) if *v == val))
-		{
-			return (idx + 1).truncate();
-		}
-		let idx = self.push(CPTag::Long(val));
-		self.tags.push(CPEntry::Padding);
-		idx
+	pub fn add_long(&mut self, val: u64) -> ConstantPoolIndex {
+		self.push(CPTag::Long(val))
 	}
 
-	pub fn add_double(&mut self, val: f64) -> u16 {
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Double(v)) if v.eq(&val)))
-		{
-			return (idx + 1).truncate();
-		}
-		let idx = self.push(CPTag::Double(val));
-		self.tags.push(CPEntry::Padding);
-		idx
+	pub fn add_double(&mut self, val: f64) -> ConstantPoolIndex {
+		self.push(CPTag::Double(val))
 	}
 
-	pub fn add_name_and_type(&mut self, name: String, descriptor: String) -> u16 {
+	pub fn add_name_and_type(&mut self, name: String, descriptor: String) -> ConstantPoolIndex {
 		let name_index = self.add_utf8(name);
 		let descriptor_index = self.add_utf8(descriptor);
-		if let Some(idx) = self.tags.iter().position(
-			|t| matches!(t, CPEntry::Tag(CPTag::NameAndType(t)) if t.name_index == name_index && t.descriptor_index == descriptor_index),
-		) {
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::NameAndType(NameAndTypeTag {
 			name_index,
 			descriptor_index,
 		}))
 	}
 
-	pub fn add_field_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+	pub fn add_field_ref(&mut self, class: String, name: String, descriptor: String) -> ConstantPoolIndex {
 		let class_index = self.add_class(class);
 		let name_and_ty_index = self.add_name_and_type(name, descriptor);
-		if let Some(idx) = self.tags.iter().position(
-			|t| matches!(t, CPEntry::Tag(CPTag::FieldRef(t)) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index),
-		) {
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::FieldRef(FieldRefTag {
 			class_index,
 			name_and_ty_index,
 		}))
 	}
 
-	pub fn add_method_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+	pub fn add_method_ref(&mut self, class: String, name: String, descriptor: String) -> ConstantPoolIndex {
 		let class_index = self.add_class(class);
 		let name_and_ty_index = self.add_name_and_type(name, descriptor);
-		if let Some(idx) = self.tags.iter().position(
-			|t| matches!(t, CPEntry::Tag(CPTag::MethodRef(t)) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index),
-		) {
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::MethodRef(MethodRefTag {
 			class_index,
 			name_and_ty_index,
 		}))
 	}
 
-	pub fn add_interface_method_ref(&mut self, class: String, name: String, descriptor: String) -> u16 {
+	pub fn add_interface_method_ref(&mut self, class: String, name: String, descriptor: String) -> ConstantPoolIndex {
 		let class_index = self.add_class(class);
 		let name_and_ty_index = self.add_name_and_type(name, descriptor);
-		if let Some(idx) = self.tags.iter().position(|t| matches!(t, CPEntry::Tag(CPTag::InterfaceMethodRef(t)) if t.class_index == class_index && t.name_and_ty_index == name_and_ty_index)) {
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
 			class_index,
 			name_and_ty_index,
 		}))
 	}
 
-	pub fn add_method_handle(&mut self, kind: u8, reference_index: u16) -> u16 {
-		if let Some(idx) = self.tags.iter().position(
-			|t| matches!(t, CPEntry::Tag(CPTag::MethodHandle(t)) if t.reference_kind == kind && t.reference_index == reference_index),
-		) {
-			return (idx + 1).truncate();
-		}
+	pub fn add_method_handle(
+		&mut self,
+		kind: MethodHandleRefKind,
+		reference_index: ConstantPoolIndex,
+	) -> ConstantPoolIndex {
 		self.push(CPTag::MethodHandle(MethodHandleTag {
 			reference_kind: kind,
 			reference_index,
 		}))
 	}
 
-	pub fn add_method_type(&mut self, descriptor: String) -> u16 {
+	pub fn add_method_type(&mut self, descriptor: String) -> ConstantPoolIndex {
 		let descriptor_index = self.add_utf8(descriptor);
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::MethodType(t)) if t.descriptor_index == descriptor_index))
-		{
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::MethodType(MethodTypeTag { descriptor_index }))
 	}
 
-	pub fn add_invoke_dynamic(&mut self, bsm_attr_idx: u16, name: String, descriptor: String) -> u16 {
+	pub fn add_invoke_dynamic(
+		&mut self,
+		bsm_attr_idx: ConstantPoolIndex,
+		name: String,
+		descriptor: String,
+	) -> ConstantPoolIndex {
 		let name_and_ty_idx = self.add_name_and_type(name, descriptor);
-		if let Some(idx) = self.tags.iter().position(|t| {
-			matches!(t, CPEntry::Tag(CPTag::InvokeDynamic(t))
-                if t.bootstrap_method_attr_index == bsm_attr_idx
-                && t.name_and_ty_index == name_and_ty_idx)
-		}) {
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::InvokeDynamic(InvokeDynamicTag {
 			bootstrap_method_attr_index: bsm_attr_idx,
 			name_and_ty_index: name_and_ty_idx,
 		}))
 	}
 
-	pub fn add_module(&mut self, name: String) -> u16 {
+	pub fn add_module(&mut self, name: String) -> ConstantPoolIndex {
 		let name_index = self.add_utf8(name);
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Module(t)) if t.name_index == name_index))
-		{
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::Module(ModuleTag { name_index }))
 	}
 
-	pub fn add_package(&mut self, name: String) -> u16 {
+	pub fn add_package(&mut self, name: String) -> ConstantPoolIndex {
 		let name_index = self.add_utf8(name);
-		if let Some(idx) = self
-			.tags
-			.iter()
-			.position(|t| matches!(t, CPEntry::Tag(CPTag::Package(t)) if t.name_index == name_index))
-		{
-			return (idx + 1).truncate();
-		}
 		self.push(CPTag::Package(PackageTag { name_index }))
 	}
 }
@@ -453,32 +380,28 @@ impl ConstantPool {
 			return Ok(Self::new());
 		}
 
-		let mut tags = Vec::with_capacity((cp_count - 1) as usize);
+		let mut this = Self::new();
+
 		let mut i = 1;
 		while i < cp_count {
 			let tag = CPTag::read(buffer)?;
-			let is_wide = matches!(tag, CPTag::Long(_) | CPTag::Double(_));
-			tags.push(CPEntry::Tag(tag));
-			i += 1;
+			i += tag.idx_len();
 
-			if is_wide {
-				tags.push(CPEntry::Padding);
-				i += 1;
-			}
+			this.push(tag);
 		}
 
-		Ok(Self { tags })
+		Ok(this)
 	}
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
 		let len = self.tags.len() + 1;
 		debug_assert!(u16::try_from(len).is_ok(), "class has too many constants");
 		buffer.write_u16::<BigEndian>(len.truncate())?;
-		for entry in self.tags.iter() {
-			match entry {
-				CPEntry::Tag(tag) => tag.write(buffer)?,
-				CPEntry::Padding => {}
-			}
+
+		let mut tags = self.tags.iter().collect::<Vec<(&ConstantPoolIndex, &CPTag)>>();
+		tags.sort_by_key(|(idx, _)| *idx);
+		for (_, tag) in tags {
+			tag.write(buffer)?;
 		}
 		Ok(())
 	}
@@ -490,74 +413,124 @@ impl fmt::Debug for ConstantPool {
 	}
 }
 
-#[derive(Debug, Clone)]
-// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.7
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.7
 pub struct Utf8Tag {
 	pub value: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClassTag {
-	pub name_index: u16, // StringTag
+	pub name_index: ConstantPoolIndex, // StringTag
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StringTag {
-	pub utf8_index: u16, // Utf8Tag
+	pub utf8_index: ConstantPoolIndex, // Utf8Tag
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FieldRefTag {
-	pub class_index: u16,       // ClassTag
-	pub name_and_ty_index: u16, // NameAndTypeTag
+	pub class_index: ConstantPoolIndex,       // ClassTag
+	pub name_and_ty_index: ConstantPoolIndex, // NameAndTypeTag
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MethodRefTag {
-	pub class_index: u16,       // ClassTag
-	pub name_and_ty_index: u16, // NameAndTypeTag
+	pub class_index: ConstantPoolIndex,       // ClassTag
+	pub name_and_ty_index: ConstantPoolIndex, // NameAndTypeTag
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InterfaceMethodRefTag {
-	pub class_index: u16,       // ClassTag
-	pub name_and_ty_index: u16, // NameAndTypeTag
+	pub class_index: ConstantPoolIndex,       // ClassTag
+	pub name_and_ty_index: ConstantPoolIndex, // NameAndTypeTag
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NameAndTypeTag {
-	pub name_index: u16,       // StringTag
-	pub descriptor_index: u16, // StringTag
+	pub name_index: ConstantPoolIndex,       // StringTag
+	pub descriptor_index: ConstantPoolIndex, // StringTag
 }
 
-#[derive(Debug, Clone)]
-/// <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.8>
+#[derive(Debug, Clone, Copy, Error)]
+pub enum MethodHandleRefKindFromIntErr {
+	#[error("MethodHandle kind out of range 1-9: {0}")]
+	OutOfRange(u8),
+}
+
+// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-5.html#jvms-5.4.3.5
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum MethodHandleRefKind {
+	GetField = 1,
+	GetStatic,
+	PutField,
+	PutStatic,
+	InvokeVirtual,
+	InvokeStatic,
+	InvokeSpecial,
+	NewInvokeSpecial,
+	InvokeInterface,
+}
+
+impl MethodHandleRefKind {
+	#[must_use]
+	pub const fn is_field(&self) -> bool {
+		matches!(
+			self,
+			Self::GetField | Self::GetStatic | Self::PutField | Self::PutStatic
+		)
+	}
+}
+
+impl TryFrom<u8> for MethodHandleRefKind {
+	type Error = MethodHandleRefKindFromIntErr;
+
+	fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
+		match value {
+			1 => Ok(Self::GetField),
+			2 => Ok(Self::GetStatic),
+			3 => Ok(Self::PutField),
+			4 => Ok(Self::PutStatic),
+			5 => Ok(Self::InvokeVirtual),
+			6 => Ok(Self::InvokeStatic),
+			7 => Ok(Self::InvokeSpecial),
+			8 => Ok(Self::NewInvokeSpecial),
+			9 => Ok(Self::InvokeInterface),
+			_ => Err(MethodHandleRefKindFromIntErr::OutOfRange(value)),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.8>
 pub struct MethodHandleTag {
-	pub reference_kind: u8,   // FIXME: types?
-	pub reference_index: u16, // FIXME: what does this point to
+	pub reference_kind: MethodHandleRefKind,
+	pub reference_index: ConstantPoolIndex, // FieldRefTag, MethodRefTag, InterfaceMethodRefTag
 }
 
-#[derive(Debug, Clone)]
-/// <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.9>
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.9>
 pub struct MethodTypeTag {
-	pub descriptor_index: u16, // StringTag
+	pub descriptor_index: ConstantPoolIndex, // StringTag
 }
 
-#[derive(Debug, Clone)]
-/// <https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.10>
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.10>
 pub struct InvokeDynamicTag {
-	pub bootstrap_method_attr_index: u16,
-	pub name_and_ty_index: u16, // NameAndTypeTag
+	pub bootstrap_method_attr_index: ConstantPoolIndex,
+	pub name_and_ty_index: ConstantPoolIndex, // NameAndTypeTag
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ModuleTag {
-	pub name_index: u16, // StringTag
+	pub name_index: ConstantPoolIndex, // StringTag
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PackageTag {
-	pub name_index: u16, // StringTag
+	pub name_index: ConstantPoolIndex, // StringTag
 }
 
 #[derive(Debug, Clone)]
@@ -566,7 +539,7 @@ pub enum CPTag {
 	Utf8(Utf8Tag) = 1,
 	Integer(u32) = 3,
 	Float(f32) = 4,
-	// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.4.5
+	// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.5
 	// All 8-byte constants take up two entries in the constant_pool table of the class file.
 	// If a CONSTANT_Long_info or CONSTANT_Double_info structure is the item in the constant_pool table-
 	// at index n, then the next usable item in the pool is located at index n+2.
@@ -584,6 +557,86 @@ pub enum CPTag {
 	InvokeDynamic(InvokeDynamicTag) = 18,
 	Module(ModuleTag) = 19,
 	Package(PackageTag) = 20,
+}
+
+impl PartialEq for CPTag {
+	fn eq(&self, other: &Self) -> bool {
+		match (self, other) {
+			(Self::Utf8(l0), Self::Utf8(r0)) => l0 == r0,
+			(Self::Integer(l0), Self::Integer(r0)) => l0 == r0,
+			(Self::Float(l0), Self::Float(r0)) => l0.to_ne_bytes() == r0.to_ne_bytes(),
+			(Self::Long(l0), Self::Long(r0)) => l0 == r0,
+			(Self::Double(l0), Self::Double(r0)) => l0.to_ne_bytes() == r0.to_ne_bytes(),
+			(Self::Class(l0), Self::Class(r0)) => l0 == r0,
+			(Self::String(l0), Self::String(r0)) => l0 == r0,
+			(Self::FieldRef(l0), Self::FieldRef(r0)) => l0 == r0,
+			(Self::MethodRef(l0), Self::MethodRef(r0)) => l0 == r0,
+			(Self::InterfaceMethodRef(l0), Self::InterfaceMethodRef(r0)) => l0 == r0,
+			(Self::NameAndType(l0), Self::NameAndType(r0)) => l0 == r0,
+			(Self::MethodHandle(l0), Self::MethodHandle(r0)) => l0 == r0,
+			(Self::MethodType(l0), Self::MethodType(r0)) => l0 == r0,
+			(Self::InvokeDynamic(l0), Self::InvokeDynamic(r0)) => l0 == r0,
+			(Self::Module(l0), Self::Module(r0)) => l0 == r0,
+			(Self::Package(l0), Self::Package(r0)) => l0 == r0,
+			_ => false,
+		}
+	}
+}
+
+impl Eq for CPTag {}
+
+impl PartialOrd for CPTag {
+	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+impl Ord for CPTag {
+	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+		match (self, other) {
+			(Self::Utf8(l0), Self::Utf8(r0)) => l0.cmp(r0),
+			(Self::Integer(l0), Self::Integer(r0)) => l0.cmp(r0),
+			(Self::Float(l0), Self::Float(r0)) => l0.total_cmp(r0),
+			(Self::Long(l0), Self::Long(r0)) => l0.cmp(r0),
+			(Self::Double(l0), Self::Double(r0)) => l0.total_cmp(r0),
+			(Self::Class(l0), Self::Class(r0)) => l0.cmp(r0),
+			(Self::String(l0), Self::String(r0)) => l0.cmp(r0),
+			(Self::FieldRef(l0), Self::FieldRef(r0)) => l0.cmp(r0),
+			(Self::MethodRef(l0), Self::MethodRef(r0)) => l0.cmp(r0),
+			(Self::InterfaceMethodRef(l0), Self::InterfaceMethodRef(r0)) => l0.cmp(r0),
+			(Self::NameAndType(l0), Self::NameAndType(r0)) => l0.cmp(r0),
+			(Self::MethodHandle(l0), Self::MethodHandle(r0)) => l0.cmp(r0),
+			(Self::MethodType(l0), Self::MethodType(r0)) => l0.cmp(r0),
+			(Self::InvokeDynamic(l0), Self::InvokeDynamic(r0)) => l0.cmp(r0),
+			(Self::Module(l0), Self::Module(r0)) => l0.cmp(r0),
+			(Self::Package(l0), Self::Package(r0)) => l0.cmp(r0),
+			_ => self.id().cmp(&other.id()),
+		}
+	}
+}
+
+impl Hash for CPTag {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		core::mem::discriminant(self).hash(state);
+		match self {
+			CPTag::Utf8(utf8_tag) => utf8_tag.hash(state),
+			CPTag::Integer(i) => i.hash(state),
+			CPTag::Float(f) => f.to_ne_bytes().hash(state),
+			CPTag::Long(l) => l.hash(state),
+			CPTag::Double(d) => d.to_ne_bytes().hash(state),
+			CPTag::Class(tag) => tag.hash(state),
+			CPTag::String(tag) => tag.hash(state),
+			CPTag::FieldRef(tag) => tag.hash(state),
+			CPTag::MethodRef(tag) => tag.hash(state),
+			CPTag::InterfaceMethodRef(tag) => tag.hash(state),
+			CPTag::NameAndType(tag) => tag.hash(state),
+			CPTag::MethodHandle(tag) => tag.hash(state),
+			CPTag::MethodType(tag) => tag.hash(state),
+			CPTag::InvokeDynamic(tag) => tag.hash(state),
+			CPTag::Module(tag) => tag.hash(state),
+			CPTag::Package(tag) => tag.hash(state),
+		}
+	}
 }
 
 impl CPTag {
@@ -609,6 +662,27 @@ impl CPTag {
 		}
 	}
 
+	pub fn idx_len(&self) -> u16 {
+		match self {
+			CPTag::Long(..) => 2,
+			CPTag::Double(..) => 2,
+			CPTag::Utf8(..)
+			| CPTag::Integer(..)
+			| CPTag::Float(..)
+			| CPTag::Class(..)
+			| CPTag::String(..)
+			| CPTag::FieldRef(..)
+			| CPTag::MethodRef(..)
+			| CPTag::InterfaceMethodRef(..)
+			| CPTag::NameAndType(..)
+			| CPTag::MethodHandle(..)
+			| CPTag::MethodType(..)
+			| CPTag::InvokeDynamic(..)
+			| CPTag::Module(..)
+			| CPTag::Package(..) => 1,
+		}
+	}
+
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<CPTag> {
 		let tag = buffer.read_u8()?;
 		match tag {
@@ -624,43 +698,43 @@ impl CPTag {
 			5 => Ok(CPTag::Long(buffer.read_u64::<BigEndian>()?)),
 			6 => Ok(CPTag::Double(buffer.read_f64::<BigEndian>()?)),
 			7 => Ok(CPTag::Class(ClassTag {
-				name_index: buffer.read_u16::<BigEndian>()?,
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			8 => Ok(CPTag::String(StringTag {
-				utf8_index: buffer.read_u16::<BigEndian>()?,
+				utf8_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			9 => Ok(CPTag::FieldRef(FieldRefTag {
-				class_index: buffer.read_u16::<BigEndian>()?,
-				name_and_ty_index: buffer.read_u16::<BigEndian>()?,
+				class_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			10 => Ok(CPTag::MethodRef(MethodRefTag {
-				class_index: buffer.read_u16::<BigEndian>()?,
-				name_and_ty_index: buffer.read_u16::<BigEndian>()?,
+				class_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			11 => Ok(CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
-				class_index: buffer.read_u16::<BigEndian>()?,
-				name_and_ty_index: buffer.read_u16::<BigEndian>()?,
+				class_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			12 => Ok(CPTag::NameAndType(NameAndTypeTag {
-				name_index: buffer.read_u16::<BigEndian>()?,
-				descriptor_index: buffer.read_u16::<BigEndian>()?,
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				descriptor_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			15 => Ok(CPTag::MethodHandle(MethodHandleTag {
-				reference_kind: buffer.read_u8()?,
-				reference_index: buffer.read_u16::<BigEndian>()?,
+				reference_kind: MethodHandleRefKind::try_from(buffer.read_u8()?)?,
+				reference_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			16 => Ok(CPTag::MethodType(MethodTypeTag {
-				descriptor_index: buffer.read_u16::<BigEndian>()?,
+				descriptor_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			18 => Ok(CPTag::InvokeDynamic(InvokeDynamicTag {
-				bootstrap_method_attr_index: buffer.read_u16::<BigEndian>()?,
-				name_and_ty_index: buffer.read_u16::<BigEndian>()?,
+				bootstrap_method_attr_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			19 => Ok(CPTag::Module(ModuleTag {
-				name_index: buffer.read_u16::<BigEndian>()?,
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			20 => Ok(CPTag::Package(PackageTag {
-				name_index: buffer.read_u16::<BigEndian>()?,
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
 			})),
 			tag => Err(ClassFileReadError::UnknownClassPoolTag(tag))?,
 		}
@@ -684,8 +758,8 @@ impl CPTag {
 			CPTag::Float(f) => buffer.write_f32::<BigEndian>(*f)?,
 			CPTag::Long(l) => buffer.write_u64::<BigEndian>(*l)?,
 			CPTag::Double(d) => buffer.write_f64::<BigEndian>(*d)?,
-			CPTag::Class(ClassTag { name_index }) => buffer.write_u16::<BigEndian>(*name_index)?,
-			CPTag::String(StringTag { utf8_index }) => buffer.write_u16::<BigEndian>(*utf8_index)?,
+			CPTag::Class(ClassTag { name_index }) => buffer.write_u16::<BigEndian>(name_index.get())?,
+			CPTag::String(StringTag { utf8_index }) => buffer.write_u16::<BigEndian>(utf8_index.get())?,
 			CPTag::FieldRef(FieldRefTag {
 				class_index,
 				name_and_ty_index,
@@ -698,35 +772,35 @@ impl CPTag {
 				class_index,
 				name_and_ty_index,
 			}) => {
-				buffer.write_u16::<BigEndian>(*class_index)?;
-				buffer.write_u16::<BigEndian>(*name_and_ty_index)?;
+				buffer.write_u16::<BigEndian>(class_index.get())?;
+				buffer.write_u16::<BigEndian>(name_and_ty_index.get())?;
 			}
 			CPTag::NameAndType(NameAndTypeTag {
 				name_index,
 				descriptor_index,
 			}) => {
-				buffer.write_u16::<BigEndian>(*name_index)?;
-				buffer.write_u16::<BigEndian>(*descriptor_index)?;
+				buffer.write_u16::<BigEndian>(name_index.get())?;
+				buffer.write_u16::<BigEndian>(descriptor_index.get())?;
 			}
 			CPTag::MethodHandle(MethodHandleTag {
 				reference_kind,
 				reference_index,
 			}) => {
-				buffer.write_u8(*reference_kind)?;
-				buffer.write_u16::<BigEndian>(*reference_index)?;
+				buffer.write_u8(*reference_kind as u8)?;
+				buffer.write_u16::<BigEndian>(reference_index.get())?;
 			}
 			CPTag::MethodType(MethodTypeTag { descriptor_index }) => {
-				buffer.write_u16::<BigEndian>(*descriptor_index)?;
+				buffer.write_u16::<BigEndian>(descriptor_index.get())?;
 			}
 			CPTag::InvokeDynamic(InvokeDynamicTag {
 				bootstrap_method_attr_index,
 				name_and_ty_index: name_and_type_index,
 			}) => {
-				buffer.write_u16::<BigEndian>(*bootstrap_method_attr_index)?;
-				buffer.write_u16::<BigEndian>(*name_and_type_index)?;
+				buffer.write_u16::<BigEndian>(bootstrap_method_attr_index.get())?;
+				buffer.write_u16::<BigEndian>(name_and_type_index.get())?;
 			}
 			CPTag::Module(ModuleTag { name_index }) | CPTag::Package(PackageTag { name_index }) => {
-				buffer.write_u16::<BigEndian>(*name_index)?;
+				buffer.write_u16::<BigEndian>(name_index.get())?;
 			}
 		}
 		Ok(())

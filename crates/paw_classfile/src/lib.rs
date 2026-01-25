@@ -4,10 +4,13 @@ use eyre::Result;
 use num_conv::Truncate;
 use thiserror::Error;
 
-pub use crate::class_pool::CPTag;
-use crate::{class_pool::ConstantPool, ext::ReadBytesExt};
+pub use crate::constant_pool::{CPTag, MethodHandleRefKind, MethodHandleRefKindFromIntErr};
+use crate::{
+	constant_pool::{ConstantPool, ConstantPoolIndex},
+	ext::ReadBytesExt,
+};
 
-pub mod class_pool;
+pub mod constant_pool;
 pub mod descriptor;
 pub mod ext;
 
@@ -129,13 +132,13 @@ impl ClassFile {
 
 #[derive(Debug)]
 pub struct AttributeInfo {
-	pub attribute_name_index: u16,
+	pub attribute_name_index: ConstantPoolIndex,
 	pub info: Vec<u8>,
 }
 
 impl AttributeInfo {
 	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<AttributeInfo> {
-		let attribute_name_index = buffer.read_u16::<BigEndian>()?;
+		let attribute_name_index = ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?);
 		let attribute_length = buffer.read_u32::<BigEndian>()?;
 		Ok(AttributeInfo {
 			attribute_name_index,
@@ -144,7 +147,7 @@ impl AttributeInfo {
 	}
 
 	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u16::<BigEndian>(self.attribute_name_index)?;
+		buffer.write_u16::<BigEndian>(self.attribute_name_index.get())?;
 		debug_assert!(u32::try_from(self.info.len()).is_ok(), "attribute info too large");
 		#[allow(clippy::cast_possible_truncation, reason = "checked above")]
 		buffer.write_u32::<BigEndian>(self.info.len() as u32)?;
