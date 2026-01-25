@@ -1,15 +1,15 @@
 use core::fmt;
 use std::{collections::HashMap, fmt::Display, hash::Hash};
 
-use byteorder::{BigEndian, WriteBytesExt};
 use eyre::Result;
+use lbytes::BytesWriteExt;
 use num_conv::Truncate;
 use thiserror::Error;
 
 use crate::{
 	ClassFileReadError,
 	descriptor::{Descriptor, DescriptorParseErr, MethodDescriptor},
-	ext::ReadBytesExt,
+	ext::BytesReadExt,
 };
 
 pub enum CPEntry {
@@ -374,8 +374,8 @@ impl Default for ConstantPool {
 
 // Read/Write
 impl ConstantPool {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<Self> {
-		let cp_count = buffer.read_u16::<BigEndian>()?;
+	pub fn read<B: BytesReadExt>(buffer: &mut B) -> Result<Self> {
+		let cp_count = buffer.read_u16()?;
 		if cp_count == 0 {
 			return Ok(Self::new());
 		}
@@ -393,10 +393,10 @@ impl ConstantPool {
 		Ok(this)
 	}
 
-	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
+	pub fn write<B: BytesWriteExt>(&self, buffer: &mut B) -> Result<()> {
 		let len = self.tags.len() + 1;
 		debug_assert!(u16::try_from(len).is_ok(), "class has too many constants");
-		buffer.write_u16::<BigEndian>(len.truncate())?;
+		buffer.write_u16(len.truncate())?;
 
 		let mut tags = self.tags.iter().collect::<Vec<(&ConstantPoolIndex, &CPTag)>>();
 		tags.sort_by_key(|(idx, _)| *idx);
@@ -683,58 +683,58 @@ impl CPTag {
 		}
 	}
 
-	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<CPTag> {
+	pub fn read<B: BytesReadExt>(buffer: &mut B) -> Result<CPTag> {
 		let tag = buffer.read_u8()?;
 		match tag {
 			1 => {
-				let len = buffer.read_u16::<BigEndian>()?;
+				let len = buffer.read_u16()?;
 				let bytes = buffer.read_vec_with(usize::from(len), |reader| Ok(reader.read_u8()?))?;
 				Ok(CPTag::Utf8(Utf8Tag {
 					value: paw_mutf8::decode(&bytes)?.into_owned(),
 				}))
 			}
-			3 => Ok(CPTag::Integer(buffer.read_u32::<BigEndian>()?)),
-			4 => Ok(CPTag::Float(buffer.read_f32::<BigEndian>()?)),
-			5 => Ok(CPTag::Long(buffer.read_u64::<BigEndian>()?)),
-			6 => Ok(CPTag::Double(buffer.read_f64::<BigEndian>()?)),
+			3 => Ok(CPTag::Integer(buffer.read_u32()?)),
+			4 => Ok(CPTag::Float(buffer.read_f32()?)),
+			5 => Ok(CPTag::Long(buffer.read_u64()?)),
+			6 => Ok(CPTag::Double(buffer.read_f64()?)),
 			7 => Ok(CPTag::Class(ClassTag {
-				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			8 => Ok(CPTag::String(StringTag {
-				utf8_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				utf8_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			9 => Ok(CPTag::FieldRef(FieldRefTag {
-				class_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
-				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				class_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			10 => Ok(CPTag::MethodRef(MethodRefTag {
-				class_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
-				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				class_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			11 => Ok(CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
-				class_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
-				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				class_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			12 => Ok(CPTag::NameAndType(NameAndTypeTag {
-				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
-				descriptor_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
+				descriptor_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			15 => Ok(CPTag::MethodHandle(MethodHandleTag {
 				reference_kind: MethodHandleRefKind::try_from(buffer.read_u8()?)?,
-				reference_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				reference_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			16 => Ok(CPTag::MethodType(MethodTypeTag {
-				descriptor_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				descriptor_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			18 => Ok(CPTag::InvokeDynamic(InvokeDynamicTag {
-				bootstrap_method_attr_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
-				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				bootstrap_method_attr_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
+				name_and_ty_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			19 => Ok(CPTag::Module(ModuleTag {
-				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			20 => Ok(CPTag::Package(PackageTag {
-				name_index: ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?),
+				name_index: ConstantPoolIndex::new_internal(buffer.read_u16()?),
 			})),
 			tag => Err(ClassFileReadError::UnknownClassPoolTag(tag))?,
 		}
@@ -746,20 +746,20 @@ impl CPTag {
 		unsafe { core::ptr::from_ref(self).cast::<u8>().read() }
 	}
 
-	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
+	pub fn write<B: BytesWriteExt>(&self, buffer: &mut B) -> Result<()> {
 		buffer.write_u8(self.id())?;
 		match self {
 			CPTag::Utf8(Utf8Tag { value }) => {
 				let bytes = paw_mutf8::encode(value);
-				buffer.write_u16::<BigEndian>(bytes.len().truncate::<u16>())?;
+				buffer.write_u16(bytes.len().truncate::<u16>())?;
 				buffer.write_all(&bytes)?;
 			}
-			CPTag::Integer(i) => buffer.write_u32::<BigEndian>(*i)?,
-			CPTag::Float(f) => buffer.write_f32::<BigEndian>(*f)?,
-			CPTag::Long(l) => buffer.write_u64::<BigEndian>(*l)?,
-			CPTag::Double(d) => buffer.write_f64::<BigEndian>(*d)?,
-			CPTag::Class(ClassTag { name_index }) => buffer.write_u16::<BigEndian>(name_index.get())?,
-			CPTag::String(StringTag { utf8_index }) => buffer.write_u16::<BigEndian>(utf8_index.get())?,
+			CPTag::Integer(i) => buffer.write_u32(*i)?,
+			CPTag::Float(f) => buffer.write_f32(*f)?,
+			CPTag::Long(l) => buffer.write_u64(*l)?,
+			CPTag::Double(d) => buffer.write_f64(*d)?,
+			CPTag::Class(ClassTag { name_index }) => buffer.write_u16(name_index.get())?,
+			CPTag::String(StringTag { utf8_index }) => buffer.write_u16(utf8_index.get())?,
 			CPTag::FieldRef(FieldRefTag {
 				class_index,
 				name_and_ty_index,
@@ -772,35 +772,35 @@ impl CPTag {
 				class_index,
 				name_and_ty_index,
 			}) => {
-				buffer.write_u16::<BigEndian>(class_index.get())?;
-				buffer.write_u16::<BigEndian>(name_and_ty_index.get())?;
+				buffer.write_u16(class_index.get())?;
+				buffer.write_u16(name_and_ty_index.get())?;
 			}
 			CPTag::NameAndType(NameAndTypeTag {
 				name_index,
 				descriptor_index,
 			}) => {
-				buffer.write_u16::<BigEndian>(name_index.get())?;
-				buffer.write_u16::<BigEndian>(descriptor_index.get())?;
+				buffer.write_u16(name_index.get())?;
+				buffer.write_u16(descriptor_index.get())?;
 			}
 			CPTag::MethodHandle(MethodHandleTag {
 				reference_kind,
 				reference_index,
 			}) => {
 				buffer.write_u8(*reference_kind as u8)?;
-				buffer.write_u16::<BigEndian>(reference_index.get())?;
+				buffer.write_u16(reference_index.get())?;
 			}
 			CPTag::MethodType(MethodTypeTag { descriptor_index }) => {
-				buffer.write_u16::<BigEndian>(descriptor_index.get())?;
+				buffer.write_u16(descriptor_index.get())?;
 			}
 			CPTag::InvokeDynamic(InvokeDynamicTag {
 				bootstrap_method_attr_index,
 				name_and_ty_index: name_and_type_index,
 			}) => {
-				buffer.write_u16::<BigEndian>(bootstrap_method_attr_index.get())?;
-				buffer.write_u16::<BigEndian>(name_and_type_index.get())?;
+				buffer.write_u16(bootstrap_method_attr_index.get())?;
+				buffer.write_u16(name_and_type_index.get())?;
 			}
 			CPTag::Module(ModuleTag { name_index }) | CPTag::Package(PackageTag { name_index }) => {
-				buffer.write_u16::<BigEndian>(name_index.get())?;
+				buffer.write_u16(name_index.get())?;
 			}
 		}
 		Ok(())

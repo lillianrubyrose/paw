@@ -9,7 +9,6 @@ workspace = true
 [dependencies]
 paw_mutf8.workspace = true
 
-byteorder.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
 num-conv.workspace = true
@@ -17,3 +16,4 @@ eyre.workspace = true
 color-eyre.workspace = true
 bitflags.workspace = true
 paste.workspace = true
+lbytes = "0.1.1"

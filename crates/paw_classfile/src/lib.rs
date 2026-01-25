@@ -1,15 +1,16 @@
 use bitflags::bitflags;
-use byteorder::{BigEndian, WriteBytesExt};
 use eyre::Result;
+use lbytes::BytesWriteExt;
 use num_conv::Truncate;
 use thiserror::Error;
 
 pub use crate::constant_pool::{CPTag, MethodHandleRefKind, MethodHandleRefKindFromIntErr};
 use crate::{
 	constant_pool::{ConstantPool, ConstantPoolIndex},
-	ext::ReadBytesExt,
+	ext::BytesReadExt,
 };
 
+pub mod attributes;
 pub mod constant_pool;
 pub mod descriptor;
 pub mod ext;
@@ -46,28 +47,26 @@ pub struct ClassFile {
 }
 
 impl ClassFile {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<ClassFile> {
-		let magic = buffer.read_u32::<BigEndian>()?;
+	pub fn read<B: BytesReadExt>(buffer: &mut B) -> Result<ClassFile> {
+		let magic = buffer.read_u32()?;
 		if magic != CLASSFILE_MAGIC {
 			return Err(ClassFileReadError::InvalidMagic)?;
 		}
 
-		let minor_version = buffer.read_u16::<BigEndian>()?;
-		let major_version = buffer.read_u16::<BigEndian>()?;
+		let minor_version = buffer.read_u16()?;
+		let major_version = buffer.read_u16()?;
 		let cp = ConstantPool::read(buffer)?;
-		let access_flags = ClassAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
-		let this_class = buffer.read_u16::<BigEndian>()?;
-		let super_class = buffer.read_u16::<BigEndian>()?;
-		let interface_count = buffer.read_u16::<BigEndian>()?;
-		let interfaces = buffer.read_vec_with(usize::from(interface_count), |reader| {
-			Ok(reader.read_u16::<BigEndian>()?)
-		})?;
+		let access_flags = ClassAccessFlags::try_from(buffer.read_u16()?)?;
+		let this_class = buffer.read_u16()?;
+		let super_class = buffer.read_u16()?;
+		let interface_count = buffer.read_u16()?;
+		let interfaces = buffer.read_vec_with(usize::from(interface_count), |reader| Ok(reader.read_u16()?))?;
 
-		let field_count = buffer.read_u16::<BigEndian>()?;
+		let field_count = buffer.read_u16()?;
 		let fields = buffer.read_vec_with(usize::from(field_count), |b| FieldInfo::read(b))?;
-		let method_count = buffer.read_u16::<BigEndian>()?;
+		let method_count = buffer.read_u16()?;
 		let methods = buffer.read_vec_with(usize::from(method_count), |b| MethodInfo::read(b))?;
-		let attribute_count = buffer.read_u16::<BigEndian>()?;
+		let attribute_count = buffer.read_u16()?;
 		let attributes = buffer.read_vec_with(usize::from(attribute_count), |b| AttributeInfo::read(b))?;
 
 		Ok(Self {
@@ -86,34 +85,34 @@ impl ClassFile {
 		})
 	}
 
-	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u32::<BigEndian>(CLASSFILE_MAGIC)?;
-		buffer.write_u16::<BigEndian>(self.version.minor)?;
-		buffer.write_u16::<BigEndian>(self.version.major)?;
+	pub fn write<B: BytesWriteExt>(&self, buffer: &mut B) -> Result<()> {
+		buffer.write_u32(CLASSFILE_MAGIC)?;
+		buffer.write_u16(self.version.minor)?;
+		buffer.write_u16(self.version.major)?;
 
 		self.cp.write(buffer)?;
 
-		buffer.write_u16::<BigEndian>(self.access_flags.bits())?;
-		buffer.write_u16::<BigEndian>(self.this_class)?;
-		buffer.write_u16::<BigEndian>(self.super_class)?;
+		buffer.write_u16(self.access_flags.bits())?;
+		buffer.write_u16(self.this_class)?;
+		buffer.write_u16(self.super_class)?;
 
 		debug_assert!(
 			u16::try_from(self.interfaces.len()).is_ok(),
 			"class has too many interfaces"
 		);
-		buffer.write_u16::<BigEndian>(self.interfaces.len().truncate())?;
+		buffer.write_u16(self.interfaces.len().truncate())?;
 		for iface in &self.interfaces {
-			buffer.write_u16::<BigEndian>(*iface)?;
+			buffer.write_u16(*iface)?;
 		}
 
 		debug_assert!(u16::try_from(self.fields.len()).is_ok(), "class has too many fields");
-		buffer.write_u16::<BigEndian>(self.fields.len().truncate())?;
+		buffer.write_u16(self.fields.len().truncate())?;
 		for field in &self.fields {
 			field.write(buffer)?;
 		}
 
 		debug_assert!(u16::try_from(self.methods.len()).is_ok(), "class has too many methods");
-		buffer.write_u16::<BigEndian>(self.methods.len().truncate())?;
+		buffer.write_u16(self.methods.len().truncate())?;
 		for method in &self.methods {
 			method.write(buffer)?;
 		}
@@ -122,7 +121,7 @@ impl ClassFile {
 			u16::try_from(self.attributes.len()).is_ok(),
 			"class has too many attributes"
 		);
-		buffer.write_u16::<BigEndian>(self.attributes.len().truncate())?;
+		buffer.write_u16(self.attributes.len().truncate())?;
 		for attr in &self.attributes {
 			attr.write(buffer)?;
 		}
@@ -137,20 +136,20 @@ pub struct AttributeInfo {
 }
 
 impl AttributeInfo {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<AttributeInfo> {
-		let attribute_name_index = ConstantPoolIndex::new_internal(buffer.read_u16::<BigEndian>()?);
-		let attribute_length = buffer.read_u32::<BigEndian>()?;
+	pub fn read<B: BytesReadExt>(buffer: &mut B) -> Result<AttributeInfo> {
+		let attribute_name_index = ConstantPoolIndex::new_internal(buffer.read_u16()?);
+		let attribute_length = buffer.read_u32()?;
 		Ok(AttributeInfo {
 			attribute_name_index,
 			info: buffer.read_vec_with(attribute_length as usize, |reader| Ok(reader.read_u8()?))?,
 		})
 	}
 
-	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u16::<BigEndian>(self.attribute_name_index.get())?;
+	pub fn write<B: BytesWriteExt>(&self, buffer: &mut B) -> Result<()> {
+		buffer.write_u16(self.attribute_name_index.get())?;
 		debug_assert!(u32::try_from(self.info.len()).is_ok(), "attribute info too large");
 		#[allow(clippy::cast_possible_truncation, reason = "checked above")]
-		buffer.write_u32::<BigEndian>(self.info.len() as u32)?;
+		buffer.write_u32(self.info.len() as u32)?;
 		buffer.write_all(&self.info)?;
 		Ok(())
 	}
@@ -330,11 +329,11 @@ pub struct FieldInfo {
 }
 
 impl FieldInfo {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<FieldInfo> {
-		let access_flags = FieldAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
-		let name_index = buffer.read_u16::<BigEndian>()?;
-		let descriptor_index = buffer.read_u16::<BigEndian>()?;
-		let attributes_count = buffer.read_u16::<BigEndian>()?;
+	pub fn read<B: BytesReadExt>(buffer: &mut B) -> Result<FieldInfo> {
+		let access_flags = FieldAccessFlags::try_from(buffer.read_u16()?)?;
+		let name_index = buffer.read_u16()?;
+		let descriptor_index = buffer.read_u16()?;
+		let attributes_count = buffer.read_u16()?;
 		let attributes = buffer.read_vec_with(usize::from(attributes_count), |b| AttributeInfo::read(b))?;
 
 		Ok(FieldInfo {
@@ -345,17 +344,17 @@ impl FieldInfo {
 		})
 	}
 
-	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u16::<BigEndian>(self.access_flags.bits())?;
-		buffer.write_u16::<BigEndian>(self.name_index)?;
-		buffer.write_u16::<BigEndian>(self.descriptor_index)?;
+	pub fn write<B: BytesWriteExt>(&self, buffer: &mut B) -> Result<()> {
+		buffer.write_u16(self.access_flags.bits())?;
+		buffer.write_u16(self.name_index)?;
+		buffer.write_u16(self.descriptor_index)?;
 
 		debug_assert!(
 			u16::try_from(self.attributes.len()).is_ok(),
 			"field {} has too many attributes",
 			self.name_index
 		);
-		buffer.write_u16::<BigEndian>(self.attributes.len().truncate())?;
+		buffer.write_u16(self.attributes.len().truncate())?;
 		for attr in &self.attributes {
 			attr.write(buffer)?;
 		}
@@ -372,11 +371,11 @@ pub struct MethodInfo {
 }
 
 impl MethodInfo {
-	pub fn read<B: ReadBytesExt>(buffer: &mut B) -> Result<MethodInfo> {
-		let access_flags = MethodAccessFlags::try_from(buffer.read_u16::<BigEndian>()?)?;
-		let name_index = buffer.read_u16::<BigEndian>()?;
-		let descriptor_index = buffer.read_u16::<BigEndian>()?;
-		let attributes_count = buffer.read_u16::<BigEndian>()?;
+	pub fn read<B: BytesReadExt>(buffer: &mut B) -> Result<MethodInfo> {
+		let access_flags = MethodAccessFlags::try_from(buffer.read_u16()?)?;
+		let name_index = buffer.read_u16()?;
+		let descriptor_index = buffer.read_u16()?;
+		let attributes_count = buffer.read_u16()?;
 		let attributes = buffer.read_vec_with(usize::from(attributes_count), |b| AttributeInfo::read(b))?;
 
 		Ok(MethodInfo {
@@ -387,17 +386,17 @@ impl MethodInfo {
 		})
 	}
 
-	pub fn write<B: WriteBytesExt>(&self, buffer: &mut B) -> Result<()> {
-		buffer.write_u16::<BigEndian>(self.access_flags.bits())?;
-		buffer.write_u16::<BigEndian>(self.name_index)?;
-		buffer.write_u16::<BigEndian>(self.descriptor_index)?;
+	pub fn write<B: BytesWriteExt>(&self, buffer: &mut B) -> Result<()> {
+		buffer.write_u16(self.access_flags.bits())?;
+		buffer.write_u16(self.name_index)?;
+		buffer.write_u16(self.descriptor_index)?;
 
 		debug_assert!(
 			u16::try_from(self.attributes.len()).is_ok(),
 			"method {} has too many attributes",
 			self.name_index
 		);
-		buffer.write_u16::<BigEndian>(self.attributes.len().truncate())?;
+		buffer.write_u16(self.attributes.len().truncate())?;
 		for attr in &self.attributes {
 			attr.write(buffer)?;
 		}

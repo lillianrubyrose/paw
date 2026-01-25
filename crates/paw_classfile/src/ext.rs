@@ -1,4 +1,4 @@
-pub trait ReadBytesExt: byteorder::ReadBytesExt {
+pub trait BytesReadExt: lbytes::BytesReadExt {
 	/// reads a vector from a reader
 	/// `len_t` is in units of T, **not** in units of bytes
 	fn read_vec_with<T, F>(&mut self, len_t: usize, mut parser: F) -> eyre::Result<Vec<T>>
@@ -13,4 +13,4 @@ pub trait ReadBytesExt: byteorder::ReadBytesExt {
 	}
 }
 
-impl<T: byteorder::ReadBytesExt> ReadBytesExt for T {}
+impl<T: lbytes::BytesReadExt> BytesReadExt for T {}
