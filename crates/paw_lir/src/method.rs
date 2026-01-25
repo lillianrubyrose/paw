@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use eyre::{Result, bail};
-use paw_classfile_format::{
+use paw_classfile::{
 	AttributeInfo, CPTag, MethodAccessFlags,
 	class_pool::{ConstantPool, FieldRefTag, InterfaceMethodRefTag, MethodHandleTag, MethodRefTag},
 	descriptor::{Descriptor, MethodDescriptor},

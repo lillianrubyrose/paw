@@ -3,7 +3,7 @@ use std::{collections::HashMap, str::FromStr};
 use byteorder::{BigEndian, WriteBytesExt};
 use eyre::{OptionExt, Result, bail, eyre};
 use num_conv::Truncate;
-use paw_classfile_format::{
+use paw_classfile::{
 	CPTag,
 	class_pool::{ClassTag, ConstantPool, InterfaceMethodRefTag, MethodRefTag, MethodTypeTag, StringTag},
 	descriptor::{Descriptor, MethodDescriptor},

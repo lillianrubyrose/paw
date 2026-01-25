@@ -1,5 +1,5 @@
 [package]
-name = "paw_classfile_lir"
+name = "paw_classfile"
 version.workspace = true
 edition.workspace = true
 
@@ -8,12 +8,12 @@ workspace = true
 
 [dependencies]
 paw_mutf8.workspace = true
-paw_classfile_format.workspace = true
 
 byteorder.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
+num-conv.workspace = true
 eyre.workspace = true
 color-eyre.workspace = true
-num-conv.workspace = true
 bitflags.workspace = true
+paste.workspace = true

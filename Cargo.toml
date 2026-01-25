@@ -2,8 +2,8 @@
 resolver = "3"
 members = [
     "crates/paw_bin",
-    "crates/paw_classfile_format",
-    "crates/paw_classfile_lir",
+    "crates/paw_classfile",
+    "crates/paw_lir",
     "crates/paw_mutf8",
 ]
 
@@ -13,8 +13,8 @@ edition = "2024"
 
 [workspace.dependencies]
 paw_mutf8 = { path = "crates/paw_mutf8" }
-paw_classfile_format = { path = "crates/paw_classfile_format" }
-paw_classfile_lir = { path = "crates/paw_classfile_lir" }
+paw_classfile = { path = "crates/paw_classfile" }
+paw_lir = { path = "crates/paw_lir" }
 
 byteorder = "1.5.0"
 thiserror = "1.0.69"

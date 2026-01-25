@@ -1,5 +1,5 @@
 use eyre::Result;
-use paw_classfile_format::{AttributeInfo, FieldAccessFlags, class_pool::ConstantPool, descriptor::Descriptor};
+use paw_classfile::{AttributeInfo, FieldAccessFlags, class_pool::ConstantPool, descriptor::Descriptor};
 
 use crate::attribute::LIRFieldAttribute;
 

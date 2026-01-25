@@ -12,5 +12,5 @@ color-eyre.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 zip = "7.0.0"
 
-paw_classfile_format.workspace= true
-paw_classfile_lir.workspace= true
+paw_classfile.workspace = true
+paw_lir.workspace = true

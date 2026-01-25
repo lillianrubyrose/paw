@@ -6,8 +6,8 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use eyre::{Context, OptionExt, Result};
-use paw_classfile_format::{CPTag, ClassFile};
-use paw_classfile_lir::class::LIRClass;
+use paw_classfile::{CPTag, ClassFile};
+use paw_lir::class::LIRClass;
 use zip::{ZipArchive, ZipWriter, write::FileOptions};
 
 #[derive(Parser)]
@@ -304,8 +304,8 @@ fn recompile_jar(path: &Path) -> Result<()> {
 mod fmt {
 	use std::fmt::Write;
 
-	use paw_classfile_format::descriptor::Descriptor;
-	use paw_classfile_lir::{class::LIRClass, field::LIRField, method::LIRMethod};
+	use paw_classfile::descriptor::Descriptor;
+	use paw_lir::{class::LIRClass, field::LIRField, method::LIRMethod};
 
 	pub fn format_class(c: &LIRClass) -> String {
 		let mut s = String::new();

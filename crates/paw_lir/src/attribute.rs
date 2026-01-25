@@ -3,7 +3,7 @@ use std::{collections::HashMap, io::Cursor};
 use byteorder::{BigEndian, ReadBytesExt as _, WriteBytesExt};
 use eyre::{Context, Result, bail};
 use num_conv::{Extend, Truncate};
-use paw_classfile_format::{
+use paw_classfile::{
 	AttributeInfo, CPTag, InnerClassAccessFlags, ModuleAccessFlags, ModuleExportAccessFlags, ModuleOpenAccessFlags,
 	ModuleRequireAccessFlags, ParameterAccessFlags,
 	class_pool::{self, ConstantPool, MethodTypeTag},

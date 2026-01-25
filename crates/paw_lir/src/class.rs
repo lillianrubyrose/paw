@@ -1,7 +1,5 @@
 use eyre::{Result, bail};
-use paw_classfile_format::{
-	ClassAccessFlags, ClassFile, ClassFileVersion, FieldInfo, MethodInfo, class_pool::ConstantPool,
-};
+use paw_classfile::{ClassAccessFlags, ClassFile, ClassFileVersion, FieldInfo, MethodInfo, class_pool::ConstantPool};
 
 use crate::{
 	attribute::{BootstrapMethod, BootstrapMethodsAttribute, LIRClassAttribute, LIRFieldAttribute, LIRMethodAttribute},
@@ -224,7 +222,7 @@ impl LIRClass {
 mod tests {
 	use std::{fs, io::Cursor};
 
-	use paw_classfile_format::ClassFile;
+	use paw_classfile::ClassFile;
 
 	use crate::class::LIRClass;
 
