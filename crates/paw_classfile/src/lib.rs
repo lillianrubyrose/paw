@@ -1,19 +1,25 @@
+use std::str::FromStr;
+
 use bitflags::bitflags;
-use eyre::Result;
-use lbytes::BytesWriteExt;
+use eyre::{Result, bail};
 use num_conv::Truncate;
 use thiserror::Error;
 
 pub use crate::constant_pool::{CPTag, MethodHandleRefKind, MethodHandleRefKindFromIntErr};
 use crate::{
-	constant_pool::{ConstantPool, ConstantPoolIndex},
-	ext::BytesReadExt,
+	attributes::class::{BootstrapMethod, BootstrapMethodArgument},
+	constant_pool::{
+		ConstantPool, ConstantPoolIndex, FieldRefTag, InterfaceMethodRefTag, MethodHandleTag, MethodRefTag,
+	},
+	descriptor::{Descriptor, MethodDescriptor},
+	ext::{BytesReadExt, BytesWriteExt},
 };
 
 pub mod attributes;
 pub mod constant_pool;
 pub mod descriptor;
 pub mod ext;
+pub mod instruction;
 
 pub const CLASSFILE_MAGIC: u32 = 0xCAFE_BABE;
 
@@ -408,6 +414,95 @@ impl MethodInfo {
 pub struct ClassFileVersion {
 	pub major: u16,
 	pub minor: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MethodHandleDescriptor {
+	Field(Descriptor),
+	Method(MethodDescriptor),
+}
+
+// https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.8
+#[derive(Debug, Clone, PartialEq)]
+pub struct MethodHandle {
+	pub kind: MethodHandleRefKind,
+	pub owner: String,
+	pub name: String,
+	pub descriptor: MethodHandleDescriptor,
+	pub is_interface: bool,
+}
+
+impl MethodHandle {
+	pub fn resolve(cp: &ConstantPool, index: ConstantPoolIndex) -> eyre::Result<Self> {
+		let MethodHandleTag {
+			reference_kind: kind,
+			reference_index,
+		} = cp.get_method_handle(index)?;
+
+		let reference_tag = cp.get_tag(*reference_index)?;
+		let (class_index, name_and_ty_index, is_interface) = match reference_tag {
+			CPTag::FieldRef(FieldRefTag {
+				class_index,
+				name_and_ty_index,
+			})
+			| CPTag::MethodRef(MethodRefTag {
+				class_index,
+				name_and_ty_index,
+			}) => (*class_index, *name_and_ty_index, false),
+			CPTag::InterfaceMethodRef(InterfaceMethodRefTag {
+				class_index,
+				name_and_ty_index,
+			}) => (*class_index, *name_and_ty_index, true),
+			tag => bail!("invalid reference tag for method handle {tag:?}"),
+		};
+
+		let owner = cp.get_class(class_index)?;
+		let owner = cp.resolve_class_name(owner)?;
+
+		let nat = cp.get_name_and_type(name_and_ty_index)?;
+		let name = cp.get_utf8(nat.name_index)?;
+		let descriptor = cp.get_utf8(nat.descriptor_index)?;
+		let descriptor = if kind.is_field() {
+			MethodHandleDescriptor::Field(Descriptor::from_str(&descriptor)?)
+		} else {
+			MethodHandleDescriptor::Method(MethodDescriptor::from_str(&descriptor)?)
+		};
+
+		Ok(Self {
+			kind: *kind,
+			owner,
+			name,
+			descriptor,
+			is_interface,
+		})
+	}
+}
+
+#[must_use]
+pub fn bsm_eq(bsm: &BootstrapMethod, handle: &MethodHandle, args: &[BootstrapMethodArgument]) -> bool {
+	if &bsm.method != handle {
+		return false;
+	}
+	if bsm.arguments.len() != args.len() {
+		return false;
+	}
+	for (a, b) in bsm.arguments.iter().zip(args.iter()) {
+		let match_arg = match (a, b) {
+			(BootstrapMethodArgument::Int(x), BootstrapMethodArgument::Int(y)) => x == y,
+			(BootstrapMethodArgument::Long(x), BootstrapMethodArgument::Long(y)) => x == y,
+			(BootstrapMethodArgument::Float(x), BootstrapMethodArgument::Float(y)) => x.to_bits() == y.to_bits(),
+			(BootstrapMethodArgument::Double(x), BootstrapMethodArgument::Double(y)) => x.to_bits() == y.to_bits(),
+			(BootstrapMethodArgument::String(x), BootstrapMethodArgument::String(y))
+			| (BootstrapMethodArgument::Class(x), BootstrapMethodArgument::Class(y)) => x == y,
+			(BootstrapMethodArgument::MethodHandle(x), BootstrapMethodArgument::MethodHandle(y)) => x == y,
+			(BootstrapMethodArgument::MethodType(x), BootstrapMethodArgument::MethodType(y)) => x == y,
+			_ => false,
+		};
+		if !match_arg {
+			return false;
+		}
+	}
+	true
 }
 
 #[cfg(test)]

@@ -1,18 +1,17 @@
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 
-use byteorder::{BigEndian, WriteBytesExt};
 use eyre::{OptionExt, Result, bail, eyre};
 use num_conv::Truncate;
-use paw_classfile::{
-	CPTag,
-	class_pool::{ClassTag, ConstantPool, InterfaceMethodRefTag, MethodRefTag, MethodTypeTag, StringTag},
-	descriptor::{Descriptor, MethodDescriptor},
-	ext::BytesReadExt,
-};
 
 use crate::{
-	attribute::{BootstrapMethod, BootstrapMethodArgument, LIRClassAttribute},
-	method::{LIRHandleDescriptor, LIRMethodHandle},
+	CPTag, MethodHandle, MethodHandleDescriptor,
+	attributes::class::{BootstrapMethod, BootstrapMethodArgument, ClassAttributeKind},
+	bsm_eq,
+	constant_pool::{
+		ClassTag, ConstantPool, ConstantPoolIndex, InterfaceMethodRefTag, MethodRefTag, MethodTypeTag, StringTag,
+	},
+	descriptor::{Descriptor, MethodDescriptor},
+	ext::{BytesReadExt, BytesWriteExt},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -324,57 +323,6 @@ pub mod opcodes {
 	pub const WIDE: u8 = 0xC4;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(unused, reason = "writing not implemented yet")]
-pub struct LIRResolvedLabel(/* private */ u32);
-
-impl LIRResolvedLabel {
-	/// This method performs no unsafe actions and is only unsafe for semantic reasoning
-	#[must_use]
-	#[allow(clippy::missing_safety_doc, reason = "doesn't actually contain any unsafe code")]
-	pub const unsafe fn new_unchecked(id: u32) -> Self {
-		Self(id)
-	}
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum LIRLabel {
-	/// An unresolved label contains the address (absoltute bytecode index / pc) of its target instruction.
-	/// This is used for labels that are not yet resolved and need to be resolved after all instructions have been parsed.
-	Unresolved(i32),
-
-	/// A resolved label has an internal id used for state keeping and comparison
-	/// Labels stored among instructions should ALWAYS be resolved and the library will panic otherwise.
-	Resolved(LIRResolvedLabel),
-}
-
-impl LIRLabel {
-	#[must_use]
-	#[track_caller]
-	pub fn as_resolved(self) -> LIRResolvedLabel {
-		match self {
-			LIRLabel::Unresolved(_) => unreachable!("BUG: called as_resolved on an unresolved label"),
-			LIRLabel::Resolved(inner) => inner,
-		}
-	}
-
-	#[must_use]
-	pub const fn is_resolved(&self) -> bool {
-		match self {
-			LIRLabel::Unresolved(_) => false,
-			LIRLabel::Resolved(_) => true,
-		}
-	}
-
-	#[must_use]
-	pub const fn is_unresolved(&self) -> bool {
-		match self {
-			LIRLabel::Unresolved(_) => true,
-			LIRLabel::Resolved(_) => false,
-		}
-	}
-}
-
 #[derive(Debug, Clone)]
 pub enum LIRLDCConstant {
 	Int(i32),
@@ -384,7 +332,7 @@ pub enum LIRLDCConstant {
 	String(String),
 	Class(String),
 	MethodType(MethodDescriptor),
-	MethodHandle(LIRMethodHandle),
+	MethodHandle(MethodHandle),
 }
 
 #[derive(Debug, Clone)]
@@ -648,13 +596,13 @@ pub enum Instruction {
 	/// Branch always
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto>
 	Goto {
-		target: LIRLabel,
+		target: u16,
 	},
 
 	/// Branch always (wide offset)
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.goto_w>
 	GotoW {
-		target: LIRLabel,
+		target: u32,
 	},
 
 	/// Convert int to byte
@@ -711,64 +659,64 @@ pub enum Instruction {
 	/// Branch if reference comparison succeeds
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_acmp_cond>
 	IfACmpEq {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfACmpNe {
-		target: LIRLabel,
+		target: u16,
 	},
 
 	/// Branch if int comparison succeeds
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_icmp_cond>
 	IfICmpEq {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfICmpNe {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfICmpLt {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfICmpGt {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfICmpLe {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfICmpGe {
-		target: LIRLabel,
+		target: u16,
 	},
 
 	/// Branch if int comparison with zero succeeds
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.if_cond>
 	IfEq {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfNe {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfLt {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfGt {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfLe {
-		target: LIRLabel,
+		target: u16,
 	},
 	IfGe {
-		target: LIRLabel,
+		target: u16,
 	},
 
 	/// Branch if reference not null
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnonnull>
 	IfNonNull {
-		target: LIRLabel,
+		target: u16,
 	},
 
 	/// Branch if reference is null
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.ifnull>
 	IfNull {
-		target: LIRLabel,
+		target: u16,
 	},
 
 	/// Increment local variable by constant
@@ -802,7 +750,7 @@ pub enum Instruction {
 	/// Invoke a dynamically-computed call site
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokedynamic>
 	InvokeDynamic {
-		bsm_handle: LIRMethodHandle,
+		bsm_handle: MethodHandle,
 		name: String,
 		descriptor: MethodDescriptor,
 		bsm_args: Vec<BootstrapMethodArgument>,
@@ -885,13 +833,13 @@ pub enum Instruction {
 	/// Jump subroutine
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr>
 	Jsr {
-		target: LIRLabel,
+		target: u16,
 	},
 
 	/// Jump subroutine (wide offset)
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.jsr_w>
 	JsrW {
-		target: LIRLabel,
+		target: u32,
 	},
 
 	/// Convert long to double
@@ -960,9 +908,9 @@ pub enum Instruction {
 	/// Access jump table by key match and jump
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.lookupswitch>
 	LookupSwitch {
-		default_target: LIRLabel,
+		default_offset: u32,
 		/// List of (match key, target label)
-		pairs: Vec<(i32, LIRLabel)>,
+		pairs: Vec<(i32, u32)>,
 	},
 
 	/// Bitwise OR long
@@ -1090,10 +1038,10 @@ pub enum Instruction {
 	/// Access jump table by index and jump
 	/// <https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.tableswitch>
 	TableSwitch {
-		default_target: LIRLabel,
+		default_offset: u32,
 		low: i32,
 		high: i32,
-		targets: Vec<LIRLabel>,
+		targets: Vec<u32>,
 	},
 }
 
@@ -1124,7 +1072,7 @@ impl Instruction {
 	pub fn parse<B: BytesReadExt>(
 		buffer: &mut B,
 		cp: &ConstantPool,
-		class_attrs: &[LIRClassAttribute],
+		class_attrs: &[ClassAttributeKind],
 		pc: u32,
 	) -> Result<Self> {
 		let mut opcode = buffer.read_u8()?;
@@ -1135,14 +1083,13 @@ impl Instruction {
 			false
 		};
 
-		let calc_jmp_target = |offset: i32| -> LIRLabel { LIRLabel::Unresolved(pc.cast_signed().wrapping_add(offset)) };
 		let inst = match opcode {
 			opcodes::AALOAD => Instruction::AALoad,
 			opcodes::AASTORE => Instruction::AAStore,
 			opcodes::ACONST_NULL => Instruction::AConstNull,
 			opcodes::ALOAD => Instruction::ALoad {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1152,15 +1099,15 @@ impl Instruction {
 			opcodes::ALOAD_2 => Instruction::ALoad { local_idx: 2 },
 			opcodes::ALOAD_3 => Instruction::ALoad { local_idx: 3 },
 			opcodes::ANEWARRAY => {
-				let idx = buffer.read_u16::<BigEndian>()?;
-				let name = cp.resolve_class_name(cp.get_class(idx)?)?;
+				let idx = buffer.read_u16()?;
+				let name = cp.resolve_class_name(cp.get_class(ConstantPoolIndex::new_internal(idx))?)?;
 				Instruction::ANewArray { element_ty: name }
 			}
 			opcodes::ARETURN => Instruction::AReturn,
 			opcodes::ARRAYLENGTH => Instruction::ArrayLength,
 			opcodes::ASTORE => Instruction::AStore {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1176,8 +1123,8 @@ impl Instruction {
 			opcodes::CALOAD => Instruction::CALoad,
 			opcodes::CASTORE => Instruction::CAStore,
 			opcodes::CHECKCAST => {
-				let idx = buffer.read_u16::<BigEndian>()?;
-				let name = cp.resolve_class_name(cp.get_class(idx)?)?;
+				let idx = buffer.read_u16()?;
+				let name = cp.resolve_class_name(cp.get_class(ConstantPoolIndex::new_internal(idx))?)?;
 				Instruction::CheckCast { object_ty: name }
 			}
 			opcodes::D2F => Instruction::D2F,
@@ -1193,7 +1140,7 @@ impl Instruction {
 			opcodes::DDIV => Instruction::DDiv,
 			opcodes::DLOAD => Instruction::DLoad {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1208,7 +1155,7 @@ impl Instruction {
 			opcodes::DRETURN => Instruction::DReturn,
 			opcodes::DSTORE => Instruction::DStore {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1238,7 +1185,7 @@ impl Instruction {
 			opcodes::FDIV => Instruction::FDiv,
 			opcodes::FLOAD => Instruction::FLoad {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1253,7 +1200,7 @@ impl Instruction {
 			opcodes::FRETURN => Instruction::FReturn,
 			opcodes::FSTORE => Instruction::FStore {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1264,9 +1211,9 @@ impl Instruction {
 			opcodes::FSTORE_3 => Instruction::FStore { local_idx: 3 },
 			opcodes::FSUB => Instruction::FSub,
 			opcodes::GETFIELD => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
-				let field_ref = cp.get_field_ref(index)?;
+				let field_ref = cp.get_field_ref(ConstantPoolIndex::new_internal(index))?;
 				let (name, descriptor) =
 					cp.resolve_field_name_and_type(cp.get_name_and_type(field_ref.name_and_ty_index)?)?;
 
@@ -1278,9 +1225,9 @@ impl Instruction {
 				}
 			}
 			opcodes::GETSTATIC => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
-				let field_ref = cp.get_field_ref(index)?;
+				let field_ref = cp.get_field_ref(ConstantPoolIndex::new_internal(index))?;
 				let (name, descriptor) =
 					cp.resolve_field_name_and_type(cp.get_name_and_type(field_ref.name_and_ty_index)?)?;
 
@@ -1292,10 +1239,10 @@ impl Instruction {
 				}
 			}
 			opcodes::GOTO => Instruction::Goto {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::GOTO_W => Instruction::GotoW {
-				target: calc_jmp_target(buffer.read_i32::<BigEndian>()?),
+				target: buffer.read_u32()?,
 			},
 			opcodes::I2B => Instruction::I2B,
 			opcodes::I2C => Instruction::I2C,
@@ -1316,56 +1263,56 @@ impl Instruction {
 			opcodes::ICONST_5 => Instruction::IConst { val: 5 },
 			opcodes::IDIV => Instruction::IDiv,
 			opcodes::IF_ACMPEQ => Instruction::IfACmpEq {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IF_ACMPNE => Instruction::IfACmpNe {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IF_ICMPEQ => Instruction::IfICmpEq {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IF_ICMPNE => Instruction::IfICmpNe {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IF_ICMPLT => Instruction::IfICmpLt {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IF_ICMPGE => Instruction::IfICmpGe {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IF_ICMPGT => Instruction::IfICmpGt {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IF_ICMPLE => Instruction::IfICmpLe {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFEQ => Instruction::IfEq {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFNE => Instruction::IfNe {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFLT => Instruction::IfLt {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFGE => Instruction::IfGe {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFGT => Instruction::IfGt {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFLE => Instruction::IfLe {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFNONNULL => Instruction::IfNonNull {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IFNULL => Instruction::IfNull {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::IINC => {
 				let (local_index, val) = if is_wide {
-					(buffer.read_u16::<BigEndian>()?, buffer.read_i16::<BigEndian>()?)
+					(buffer.read_u16()?, buffer.read_i16()?)
 				} else {
 					(u16::from(buffer.read_u8()?), i16::from(buffer.read_i8()?))
 				};
@@ -1373,7 +1320,7 @@ impl Instruction {
 			}
 			opcodes::ILOAD => Instruction::ILoad {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1385,12 +1332,12 @@ impl Instruction {
 			opcodes::IMUL => Instruction::IMul,
 			opcodes::INEG => Instruction::INeg,
 			opcodes::INSTANCEOF => {
-				let idx = buffer.read_u16::<BigEndian>()?;
-				let name = cp.resolve_class_name(cp.get_class(idx)?)?;
+				let idx = buffer.read_u16()?;
+				let name = cp.resolve_class_name(cp.get_class(ConstantPoolIndex::new_internal(idx))?)?;
 				Instruction::InstanceOf { class_type: name }
 			}
 			opcodes::INVOKE_DYNAMIC => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
 				if buffer.read_u8()? != 0 {
 					bail!("Invalid opcode for INVOKE_DYNAMIC");
@@ -1399,17 +1346,17 @@ impl Instruction {
 					bail!("Invalid opcode for INVOKE_DYNAMIC");
 				}
 
-				let tag = cp.get_invoke_dynamic(index)?;
+				let tag = cp.get_invoke_dynamic(ConstantPoolIndex::new_internal(index))?;
 				let bootstrap_methods = class_attrs
 					.iter()
 					.find_map(|attr| match attr {
-						LIRClassAttribute::BootstrapMethods(attr) => Some(attr),
+						ClassAttributeKind::BootstrapMethods(attr) => Some(attr),
 						_ => None,
 					})
 					.ok_or_eyre("class had INVOKE_DYNAMIC but did not have a BootstrapMethods attr")?;
 				let Some(bsm) = bootstrap_methods
 					.methods
-					.get(tag.bootstrap_method_attr_index as usize)
+					.get(tag.bootstrap_method_attr_index.get() as usize)
 					.cloned()
 				else {
 					bail!("Referenced BSM for InvokeDynamic not present in parent")
@@ -1425,14 +1372,14 @@ impl Instruction {
 				}
 			}
 			opcodes::INVOKE_INTERFACE => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 				let count = buffer.read_u8()?;
 				let zero = buffer.read_u8()?;
 				if zero != 0 {
 					bail!("Fourth operand of invokeinterface must be 0");
 				}
 
-				let method_ref = cp.get_interface_method_ref(index)?;
+				let method_ref = cp.get_interface_method_ref(ConstantPoolIndex::new_internal(index))?;
 				let nat = cp.get_name_and_type(method_ref.name_and_ty_index)?;
 				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
 
@@ -1447,9 +1394,9 @@ impl Instruction {
 				}
 			}
 			opcodes::INVOKE_SPECIAL => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
-				let tag = cp.get_tag(index)?;
+				let tag = cp.get_tag(ConstantPoolIndex::new_internal(index))?;
 				let (class_index, name_and_type_index, is_interface) = match tag {
 					CPTag::MethodRef(MethodRefTag {
 						class_index,
@@ -1475,9 +1422,9 @@ impl Instruction {
 				}
 			}
 			opcodes::INVOKE_STATIC => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
-				let tag = cp.get_tag(index)?;
+				let tag = cp.get_tag(ConstantPoolIndex::new_internal(index))?;
 				let (class_index, name_and_type_index, is_interface) = match tag {
 					CPTag::MethodRef(MethodRefTag {
 						class_index,
@@ -1503,9 +1450,9 @@ impl Instruction {
 				}
 			}
 			opcodes::INVOKE_VIRTUAL => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
-				let method_ref = cp.get_method_ref(index)?;
+				let method_ref = cp.get_method_ref(ConstantPoolIndex::new_internal(index))?;
 				let nat = cp.get_name_and_type(method_ref.name_and_ty_index)?;
 				let (name, descriptor) = cp.resolve_method_name_and_type(nat)?;
 
@@ -1525,7 +1472,7 @@ impl Instruction {
 			opcodes::ISHR => Instruction::IShr,
 			opcodes::ISTORE => Instruction::IStore {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1538,10 +1485,10 @@ impl Instruction {
 			opcodes::IUSHR => Instruction::IUShr,
 			opcodes::IXOR => Instruction::IXor,
 			opcodes::JSR => Instruction::Jsr {
-				target: calc_jmp_target(i32::from(buffer.read_i16::<BigEndian>()?)),
+				target: buffer.read_u16()?,
 			},
 			opcodes::JSR_W => Instruction::JsrW {
-				target: calc_jmp_target(buffer.read_i32::<BigEndian>()?),
+				target: buffer.read_u32()?,
 			},
 			opcodes::L2D => Instruction::LongToDouble,
 			opcodes::L2F => Instruction::LongToFloat,
@@ -1557,9 +1504,9 @@ impl Instruction {
 				let index = if opcode == opcodes::LDC {
 					u16::from(buffer.read_u8()?)
 				} else {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				};
-				let tag = cp.get_tag(index)?;
+				let tag = cp.get_tag(ConstantPoolIndex::new_internal(index))?;
 				let constant = match tag {
 					CPTag::Integer(v) => LIRLDCConstant::Int(v.cast_signed()),
 					CPTag::Float(v) => LIRLDCConstant::Float(*v),
@@ -1569,14 +1516,16 @@ impl Instruction {
 						let descriptor = cp.get_utf8(*descriptor_index)?;
 						LIRLDCConstant::MethodType(MethodDescriptor::from_str(&descriptor)?)
 					}
-					CPTag::MethodHandle { .. } => LIRLDCConstant::MethodHandle(LIRMethodHandle::resolve(cp, index)?),
+					CPTag::MethodHandle { .. } => {
+						LIRLDCConstant::MethodHandle(MethodHandle::resolve(cp, ConstantPoolIndex::new_internal(index))?)
+					}
 					_ => bail!("invalid tag for ldc: {:?}", tag),
 				};
 				Instruction::Ldc { constant }
 			}
 			opcodes::LDC2_W => {
-				let index = buffer.read_u16::<BigEndian>()?;
-				let tag = cp.get_tag(index)?;
+				let index = buffer.read_u16()?;
+				let tag = cp.get_tag(ConstantPoolIndex::new_internal(index))?;
 				let constant = match tag {
 					CPTag::Long(v) => LIRLDCConstant::Long(v.cast_signed()),
 					CPTag::Double(v) => LIRLDCConstant::Double(*v),
@@ -1587,7 +1536,7 @@ impl Instruction {
 			opcodes::LDIV => Instruction::LDiv,
 			opcodes::LLOAD => Instruction::LLoad {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1606,10 +1555,9 @@ impl Instruction {
 					buffer.read_u8()?;
 				}
 
-				let default_offset = buffer.read_i32::<BigEndian>()?;
-				let default_target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(default_offset));
+				let default_offset = buffer.read_u32()?;
 
-				let npairs = buffer.read_i32::<BigEndian>()?;
+				let npairs = buffer.read_i32()?;
 				if npairs < 0 {
 					bail!("lookupswitch npairs must be >= 0");
 				}
@@ -1617,13 +1565,12 @@ impl Instruction {
 				#[allow(clippy::cast_sign_loss, reason = "checked above")]
 				let mut pairs = Vec::with_capacity(npairs as usize);
 				for _ in 0..npairs {
-					let match_key = buffer.read_i32::<BigEndian>()?;
-					let offset = buffer.read_i32::<BigEndian>()?;
-					let target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(offset));
-					pairs.push((match_key, target));
+					let match_key = buffer.read_i32()?;
+					let offset = buffer.read_u32()?;
+					pairs.push((match_key, offset));
 				}
 
-				Instruction::LookupSwitch { default_target, pairs }
+				Instruction::LookupSwitch { default_offset, pairs }
 			}
 			opcodes::LOR => Instruction::LOr,
 			opcodes::LREM => Instruction::LRem,
@@ -1632,7 +1579,7 @@ impl Instruction {
 			opcodes::LSHR => Instruction::LShr,
 			opcodes::LSTORE => Instruction::LStore {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1647,17 +1594,17 @@ impl Instruction {
 			opcodes::MONITORENTER => Instruction::MonitorEnter,
 			opcodes::MONITOREXIT => Instruction::MonitorExit,
 			opcodes::MULTIANEWARRAY => {
-				let idx = buffer.read_u16::<BigEndian>()?;
+				let idx = buffer.read_u16()?;
 				let dimensions = buffer.read_u8()?;
-				let name = cp.resolve_class_name(cp.get_class(idx)?)?;
+				let name = cp.resolve_class_name(cp.get_class(ConstantPoolIndex::new_internal(idx))?)?;
 				Instruction::MultiANewArray {
 					element_ty: name,
 					dimensions,
 				}
 			}
 			opcodes::NEW => {
-				let idx = buffer.read_u16::<BigEndian>()?;
-				let name = cp.resolve_class_name(cp.get_class(idx)?)?;
+				let idx = buffer.read_u16()?;
+				let name = cp.resolve_class_name(cp.get_class(ConstantPoolIndex::new_internal(idx))?)?;
 				Instruction::New { object_ty: name }
 			}
 			opcodes::NEWARRAY => {
@@ -1668,9 +1615,9 @@ impl Instruction {
 			opcodes::POP => Instruction::Pop,
 			opcodes::POP2 => Instruction::Pop2,
 			opcodes::PUTFIELD => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
-				let field_ref = cp.get_field_ref(index)?;
+				let field_ref = cp.get_field_ref(ConstantPoolIndex::new_internal(index))?;
 				let nat = cp.get_name_and_type(field_ref.name_and_ty_index)?;
 				let (name, descriptor) = cp.resolve_field_name_and_type(nat)?;
 
@@ -1683,9 +1630,9 @@ impl Instruction {
 				}
 			}
 			opcodes::PUTSTATIC => {
-				let index = buffer.read_u16::<BigEndian>()?;
+				let index = buffer.read_u16()?;
 
-				let field_ref = cp.get_field_ref(index)?;
+				let field_ref = cp.get_field_ref(ConstantPoolIndex::new_internal(index))?;
 				let nat = cp.get_name_and_type(field_ref.name_and_ty_index)?;
 				let (name, descriptor) = cp.resolve_field_name_and_type(nat)?;
 
@@ -1699,7 +1646,7 @@ impl Instruction {
 			}
 			opcodes::RET => Instruction::Ret {
 				local_idx: if is_wide {
-					buffer.read_u16::<BigEndian>()?
+					buffer.read_u16()?
 				} else {
 					u16::from(buffer.read_u8()?)
 				},
@@ -1708,7 +1655,7 @@ impl Instruction {
 			opcodes::SALOAD => Instruction::SALoad,
 			opcodes::SASTORE => Instruction::SAStore,
 			opcodes::SIPUSH => Instruction::SIPush {
-				val: buffer.read_i16::<BigEndian>()?,
+				val: buffer.read_i16()?,
 			},
 			opcodes::SWAP => Instruction::Swap,
 			opcodes::TABLESWITCH => {
@@ -1719,11 +1666,10 @@ impl Instruction {
 					buffer.read_u8()?;
 				}
 
-				let default_offset = buffer.read_i32::<BigEndian>()?;
-				let default_target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(default_offset));
+				let default_offset = buffer.read_u32()?;
 
-				let low = buffer.read_i32::<BigEndian>()?;
-				let high = buffer.read_i32::<BigEndian>()?;
+				let low = buffer.read_i32()?;
+				let high = buffer.read_i32()?;
 
 				if low > high {
 					bail!("tableswitch low ({}) must be <= high ({})", low, high);
@@ -1738,13 +1684,12 @@ impl Instruction {
 				#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked above")]
 				let mut targets = Vec::with_capacity(count as usize);
 				for _ in 0..count {
-					let offset = buffer.read_i32::<BigEndian>()?;
-					let target = LIRLabel::Unresolved(pc.cast_signed().wrapping_add(offset));
-					targets.push(target);
+					let offset = buffer.read_u32()?;
+					targets.push(offset);
 				}
 
 				Instruction::TableSwitch {
-					default_target,
+					default_offset,
 					low,
 					high,
 					targets,
@@ -1758,27 +1703,14 @@ impl Instruction {
 	/// writes an instruction to `buffer`.
 	/// returns a map containing all of the labels that need to be fixed after writing.
 	/// map is from the byte offset from `pc` where the label starts to the label and whether it's a wide reference.
-	pub fn write<W: WriteBytesExt>(
+	pub fn write<W: BytesWriteExt>(
 		&self,
 		buffer: &mut W,
 		cp: &mut ConstantPool,
 		pc: u32,
 		bsm_pool: &[BootstrapMethod],
-	) -> Result<HashMap<u32, (LIRResolvedLabel, bool)>> {
+	) -> Result<()> {
 		let mut opcode = |op: u8| buffer.write_u8(op);
-
-		let mut labels = HashMap::new();
-		let mut write_label = |buffer: &mut W, pc_offset: u32, label: LIRResolvedLabel, is_wide: bool| -> Result<()> {
-			const DUMMY_THIN_LABEL: i16 = i16::MAX;
-			const DUMMY_WIDE_LABEL: i32 = i32::MAX;
-
-			labels.insert(pc_offset, (label, is_wide));
-			match is_wide {
-				true => buffer.write_i32::<BigEndian>(DUMMY_WIDE_LABEL)?,
-				false => buffer.write_i16::<BigEndian>(DUMMY_THIN_LABEL)?,
-			}
-			Ok(())
-		};
 
 		match self {
 			Instruction::AALoad => opcode(opcodes::AALOAD)?,
@@ -1793,7 +1725,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::ALOAD)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::ALOAD)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -1803,7 +1735,7 @@ impl Instruction {
 			Instruction::ANewArray { element_ty } => {
 				let element_idx = cp.add_class(element_ty.clone());
 				opcode(opcodes::ANEWARRAY)?;
-				buffer.write_u16::<BigEndian>(element_idx)?;
+				buffer.write_u16(element_idx.get())?;
 			}
 			Instruction::AReturn => opcode(opcodes::ARETURN)?,
 			Instruction::ArrayLength => opcode(opcodes::ARRAYLENGTH)?,
@@ -1816,7 +1748,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::ASTORE)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::ASTORE)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -1835,7 +1767,7 @@ impl Instruction {
 			Instruction::CheckCast { object_ty } => {
 				let element_idx = cp.add_class(object_ty.clone());
 				opcode(opcodes::CHECKCAST)?;
-				buffer.write_u16::<BigEndian>(element_idx)?;
+				buffer.write_u16(element_idx.get())?;
 			}
 			Instruction::D2F => opcode(opcodes::D2F)?,
 			Instruction::D2I => opcode(opcodes::D2I)?,
@@ -1858,7 +1790,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::DLOAD)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::DLOAD)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -1879,7 +1811,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::DSTORE)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::DSTORE)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -1915,7 +1847,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::FLOAD)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::FLOAD)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -1936,7 +1868,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::FSTORE)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::FSTORE)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -1951,7 +1883,7 @@ impl Instruction {
 			} => {
 				opcode(opcodes::GETFIELD)?;
 				let idx = cp.add_field_ref(class.clone(), name.clone(), descriptor.jvm_repr());
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 			}
 			Instruction::GetStatic {
 				owner,
@@ -1960,15 +1892,15 @@ impl Instruction {
 			} => {
 				opcode(opcodes::GETSTATIC)?;
 				let idx = cp.add_field_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 			}
 			Instruction::Goto { target } => {
 				opcode(opcodes::GOTO)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::GotoW { target } => {
 				opcode(opcodes::GOTO_W)?;
-				write_label(buffer, 1, target.as_resolved(), true)?;
+				buffer.write_u32(*target)?;
 			}
 			Instruction::I2B => opcode(opcodes::I2B)?,
 			Instruction::I2C => opcode(opcodes::I2C)?,
@@ -1993,74 +1925,74 @@ impl Instruction {
 			Instruction::IDiv => opcode(opcodes::IDIV)?,
 			Instruction::IfACmpEq { target } => {
 				opcode(opcodes::IF_ACMPEQ)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfACmpNe { target } => {
 				opcode(opcodes::IF_ACMPNE)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfICmpEq { target } => {
 				opcode(opcodes::IF_ICMPEQ)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfICmpNe { target } => {
 				opcode(opcodes::IF_ICMPNE)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfICmpLt { target } => {
 				opcode(opcodes::IF_ICMPLT)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfICmpGt { target } => {
 				opcode(opcodes::IF_ICMPGT)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfICmpLe { target } => {
 				opcode(opcodes::IF_ICMPLE)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfICmpGe { target } => {
 				opcode(opcodes::IF_ICMPGE)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfEq { target } => {
 				opcode(opcodes::IFEQ)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfNe { target } => {
 				opcode(opcodes::IFNE)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfLt { target } => {
 				opcode(opcodes::IFLT)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfGt { target } => {
 				opcode(opcodes::IFGT)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfLe { target } => {
 				opcode(opcodes::IFLE)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfGe { target } => {
 				opcode(opcodes::IFGE)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfNonNull { target } => {
 				opcode(opcodes::IFNONNULL)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IfNull { target } => {
 				opcode(opcodes::IFNULL)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::IInc { local_index, val } => {
 				if *local_index > u16::from(u8::MAX) || *val > i16::from(i8::MAX) || *val < i16::from(i8::MIN) {
 					opcode(opcodes::WIDE)?;
 					opcode(opcodes::IINC)?;
-					buffer.write_u16::<BigEndian>(*local_index)?;
-					buffer.write_i16::<BigEndian>(*val)?;
+					buffer.write_u16(*local_index)?;
+					buffer.write_i16(*val)?;
 				} else {
 					opcode(opcodes::IINC)?;
 					buffer.write_u8(local_index.truncate())?;
@@ -2077,7 +2009,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::ILOAD)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::ILOAD)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -2089,7 +2021,7 @@ impl Instruction {
 			Instruction::InstanceOf { class_type } => {
 				let class_idx = cp.add_class(class_type.clone());
 				opcode(opcodes::INSTANCEOF)?;
-				buffer.write_u16::<BigEndian>(class_idx)?;
+				buffer.write_u16(class_idx.get())?;
 			}
 			Instruction::InvokeDynamic {
 				bsm_handle,
@@ -2101,11 +2033,15 @@ impl Instruction {
 
 				let bsm_idx = bsm_pool
 					.iter()
-					.position(|bsm| crate::attribute::bsm_eq(bsm, bsm_handle, bsm_args))
+					.position(|bsm| bsm_eq(bsm, bsm_handle, bsm_args))
 					.ok_or_eyre("bsm not found during write")?;
 
-				let idx = cp.add_invoke_dynamic(bsm_idx.truncate(), name.clone(), descriptor.jvm_repr());
-				buffer.write_u16::<BigEndian>(idx)?;
+				let idx = cp.add_invoke_dynamic(
+					ConstantPoolIndex::new_internal(bsm_idx.truncate()),
+					name.clone(),
+					descriptor.jvm_repr(),
+				);
+				buffer.write_u16(idx.get())?;
 				buffer.write_u8(0)?;
 				buffer.write_u8(0)?;
 			}
@@ -2117,7 +2053,7 @@ impl Instruction {
 			} => {
 				opcode(opcodes::INVOKE_INTERFACE)?;
 				let idx = cp.add_interface_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 				buffer.write_u8(*count)?;
 				buffer.write_u8(0)?;
 			}
@@ -2133,7 +2069,7 @@ impl Instruction {
 				} else {
 					cp.add_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr())
 				};
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 			}
 			Instruction::InvokeStatic {
 				owner,
@@ -2147,7 +2083,7 @@ impl Instruction {
 				} else {
 					cp.add_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr())
 				};
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 			}
 			Instruction::InvokeVirtual {
 				owner,
@@ -2156,7 +2092,7 @@ impl Instruction {
 			} => {
 				opcode(opcodes::INVOKE_VIRTUAL)?;
 				let idx = cp.add_method_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 			}
 			Instruction::IOr => opcode(opcodes::IOR)?,
 			Instruction::IRem => opcode(opcodes::IREM)?,
@@ -2173,7 +2109,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::ISTORE)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::ISTORE)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -2185,11 +2121,11 @@ impl Instruction {
 			Instruction::IXor => opcode(opcodes::IXOR)?,
 			Instruction::Jsr { target } => {
 				opcode(opcodes::JSR)?;
-				write_label(buffer, 1, target.as_resolved(), false)?;
+				buffer.write_u16(*target)?;
 			}
 			Instruction::JsrW { target } => {
 				opcode(opcodes::JSR_W)?;
-				write_label(buffer, 1, target.as_resolved(), true)?;
+				buffer.write_u32(*target)?;
 			}
 			Instruction::LongToDouble => opcode(opcodes::L2D)?,
 			Instruction::LongToFloat => opcode(opcodes::L2F)?,
@@ -2215,10 +2151,10 @@ impl Instruction {
 					LIRLDCConstant::MethodType(v) => (cp.add_method_type(v.jvm_repr()), false),
 					LIRLDCConstant::MethodHandle(v) => {
 						let field_ref = match &v.descriptor {
-							LIRHandleDescriptor::Field(f) => {
+							MethodHandleDescriptor::Field(f) => {
 								cp.add_field_ref(v.owner.clone(), v.name.clone(), f.jvm_repr())
 							}
-							LIRHandleDescriptor::Method(m) => {
+							MethodHandleDescriptor::Method(m) => {
 								if v.is_interface {
 									cp.add_interface_method_ref(v.owner.clone(), v.name.clone(), m.jvm_repr())
 								} else {
@@ -2232,13 +2168,13 @@ impl Instruction {
 
 				if is_wide {
 					opcode(opcodes::LDC2_W)?;
-					buffer.write_u16::<BigEndian>(idx)?;
-				} else if idx <= 255 {
+					buffer.write_u16(idx.get())?;
+				} else if idx.get() <= 255 {
 					opcode(opcodes::LDC)?;
-					buffer.write_u8(idx.truncate())?;
+					buffer.write_u8(idx.get().truncate())?;
 				} else {
 					opcode(opcodes::LDC_W)?;
-					buffer.write_u16::<BigEndian>(idx)?;
+					buffer.write_u16(idx.get())?;
 				}
 			}
 			Instruction::LDiv => opcode(opcodes::LDIV)?,
@@ -2251,7 +2187,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::LLOAD)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::LLOAD)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -2260,7 +2196,10 @@ impl Instruction {
 			},
 			Instruction::LMul => opcode(opcodes::LMUL)?,
 			Instruction::LNeg => opcode(opcodes::LNEG)?,
-			Instruction::LookupSwitch { default_target, pairs } => {
+			Instruction::LookupSwitch {
+				default_offset: default_target,
+				pairs,
+			} => {
 				opcode(opcodes::LOOKUPSWITCH)?;
 
 				let current_offset = pc + 1;
@@ -2270,7 +2209,7 @@ impl Instruction {
 					buffer.write_u8(0)?;
 				}
 
-				write_label(buffer, 1 + padding, default_target.as_resolved(), true)?;
+				buffer.write_u32(*default_target)?;
 
 				let npairs = pairs.len();
 				if npairs > i32::MAX as usize {
@@ -2282,14 +2221,11 @@ impl Instruction {
 					clippy::cast_sign_loss,
 					reason = "AAA"
 				)]
-				buffer.write_i32::<BigEndian>(npairs as i32)?;
+				buffer.write_i32(npairs as i32)?;
 
-				let mut current_offset = 1 + padding + 4 + 4;
 				for (match_key, target) in pairs {
-					buffer.write_i32::<BigEndian>(*match_key)?;
-					current_offset += 4;
-					write_label(buffer, current_offset, target.as_resolved(), true)?;
-					current_offset += 4;
+					buffer.write_i32(*match_key)?;
+					buffer.write_u32(*target)?;
 				}
 			}
 			Instruction::LOr => opcode(opcodes::LOR)?,
@@ -2306,7 +2242,7 @@ impl Instruction {
 					if *local_idx > u16::from(u8::MAX) {
 						opcode(opcodes::WIDE)?;
 						opcode(opcodes::LSTORE)?;
-						buffer.write_u16::<BigEndian>(*local_idx)?;
+						buffer.write_u16(*local_idx)?;
 					} else {
 						opcode(opcodes::LSTORE)?;
 						buffer.write_u8(local_idx.truncate())?;
@@ -2321,13 +2257,13 @@ impl Instruction {
 			Instruction::MultiANewArray { element_ty, dimensions } => {
 				let element_idx = cp.add_class(element_ty.clone());
 				opcode(opcodes::MULTIANEWARRAY)?;
-				buffer.write_u16::<BigEndian>(element_idx)?;
+				buffer.write_u16(element_idx.get())?;
 				buffer.write_u8(*dimensions)?;
 			}
 			Instruction::New { object_ty } => {
 				let object_idx = cp.add_class(object_ty.clone());
 				opcode(opcodes::NEW)?;
-				buffer.write_u16::<BigEndian>(object_idx)?;
+				buffer.write_u16(object_idx.get())?;
 			}
 			Instruction::NewArray { ty } => {
 				opcode(opcodes::NEWARRAY)?;
@@ -2343,7 +2279,7 @@ impl Instruction {
 			} => {
 				opcode(opcodes::PUTFIELD)?;
 				let idx = cp.add_field_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 			}
 			Instruction::PutStatic {
 				owner,
@@ -2352,13 +2288,13 @@ impl Instruction {
 			} => {
 				opcode(opcodes::PUTSTATIC)?;
 				let idx = cp.add_field_ref(owner.clone(), name.clone(), descriptor.jvm_repr());
-				buffer.write_u16::<BigEndian>(idx)?;
+				buffer.write_u16(idx.get())?;
 			}
 			Instruction::Ret { local_idx } => {
 				if *local_idx > u16::from(u8::MAX) {
 					opcode(opcodes::WIDE)?;
 					opcode(opcodes::RET)?;
-					buffer.write_u16::<BigEndian>(*local_idx)?;
+					buffer.write_u16(*local_idx)?;
 				} else {
 					opcode(opcodes::RET)?;
 					buffer.write_u8(local_idx.truncate())?;
@@ -2369,11 +2305,11 @@ impl Instruction {
 			Instruction::SAStore => opcode(opcodes::SASTORE)?,
 			Instruction::SIPush { val } => {
 				opcode(opcodes::SIPUSH)?;
-				buffer.write_i16::<BigEndian>(*val)?;
+				buffer.write_i16(*val)?;
 			}
 			Instruction::Swap => opcode(opcodes::SWAP)?,
 			Instruction::TableSwitch {
-				default_target,
+				default_offset: default_target,
 				low,
 				high,
 				targets,
@@ -2387,10 +2323,10 @@ impl Instruction {
 					buffer.write_u8(0)?;
 				}
 
-				write_label(buffer, 1 + padding, default_target.as_resolved(), true)?;
+				buffer.write_u32(*default_target)?;
 
-				buffer.write_i32::<BigEndian>(*low)?;
-				buffer.write_i32::<BigEndian>(*high)?;
+				buffer.write_i32(*low)?;
+				buffer.write_i32(*high)?;
 
 				#[allow(clippy::cast_possible_truncation, reason = "AAAA")]
 				if targets.len() != (i64::from(*high) - i64::from(*low) + 1).cast_unsigned() as usize {
@@ -2402,14 +2338,12 @@ impl Instruction {
 					);
 				}
 
-				let mut current_offset = 1 + padding + 4 + 4 + 4;
 				for target in targets {
-					write_label(buffer, current_offset, target.as_resolved(), true)?;
-					current_offset += 4;
+					buffer.write_u32(*target)?;
 				}
 			}
 		}
 
-		Ok(labels)
+		Ok(())
 	}
 }

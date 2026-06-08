@@ -2,14 +2,13 @@ use core::fmt;
 use std::{collections::HashMap, fmt::Display, hash::Hash};
 
 use eyre::Result;
-use lbytes::BytesWriteExt;
 use num_conv::Truncate;
 use thiserror::Error;
 
 use crate::{
 	ClassFileReadError,
 	descriptor::{Descriptor, DescriptorParseErr, MethodDescriptor},
-	ext::BytesReadExt,
+	ext::{BytesReadExt, BytesWriteExt},
 };
 
 pub enum CPEntry {

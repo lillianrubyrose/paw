@@ -13,4 +13,3 @@ clap = { version = "4.5", features = ["derive"] }
 zip = "7.0.0"
 
 paw_classfile.workspace = true
-paw_lir.workspace = true
